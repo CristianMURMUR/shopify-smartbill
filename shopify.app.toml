@@ -1,0 +1,24 @@
+client_id = "99f69471c4608a612e0f57ca86fc74ff"
+name = "Smartbill Transfer Importer"
+application_url = "https://example.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+[access_scopes]
+scopes = "read_locations,write_locations,read_products,write_products,read_inventory,write_inventory,write_inventory_transfers,read_inventory_transfers"
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
