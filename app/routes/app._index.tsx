@@ -6,22 +6,31 @@ import type {
   LoaderFunctionArgs,
 } from "react-router";
 
-import { useFetcher, useLoaderData } from "react-router";
+import { useFetcher } from "react-router";
+
 import { useAppBridge } from "@shopify/app-bridge-react";
+
 import { authenticate } from "../shopify.server";
+
 import { boundary } from "@shopify/shopify-app-react-router/server";
+
+import prisma from "../db.server";
 
 // ============================================================
 // SHOPIFY LOCATIONS
 // ============================================================
 
 const LOCATION_1_ID = "gid://shopify/Location/86611853498";
+
 const LOCATION_1_NAME = "Shop location";
+
 const LOCATION_1_ADDRESS =
   "Calea Floreasca nr 244-246, Sector 1, Jud.: Bucuresti";
 
 const LOCATION_3_ID = "gid://shopify/Location/86611919034";
+
 const LOCATION_3_NAME = "My Custom Location";
+
 const LOCATION_3_ADDRESS =
   "MURMUR ELECTROMAGNETICA, Calea Rahovei 266-288, corp 3, etaj 2, Sector 5, Bucuresti";
 
@@ -29,18 +38,20 @@ const LOCATION_3_ADDRESS =
 // SHOPIFY ADMIN URL
 // ============================================================
 
-const SHOPIFY_ADMIN_TRANSFERS_PATH =
-  "/admin/inventory/transfers";
-
 function getTransferAdminUrl(
+  shop: string,
   transferId: string,
 ) {
-  const numericId =
-    transferId.split("/").pop();
+  const numericId = transferId.split("/").pop();
+
+  const storeHandle = shop.replace(
+    ".myshopify.com",
+    "",
+  );
 
   return numericId
-    ? `${SHOPIFY_ADMIN_TRANSFERS_PATH}/${numericId}`
-    : SHOPIFY_ADMIN_TRANSFERS_PATH;
+    ? `https://admin.shopify.com/store/${storeHandle}/transfers/${numericId}`
+    : `https://admin.shopify.com/store/${storeHandle}/transfers`;
 }
 
 // ============================================================
@@ -74,18 +85,6 @@ type TransferLocation = {
   name: string;
 };
 
-type ImportHistoryItem = {
-  id: string;
-  avizNumber: string;
-  transferId: string;
-  transferName: string;
-  createdAt: string;
-};
-
-type LoaderData = {
-  importHistory: ImportHistoryItem[];
-};
-
 type ActionResult =
   | {
       ok: true;
@@ -107,6 +106,7 @@ type ActionResult =
         referenceName: string | null;
         origin: string;
         destination: string;
+        adminUrl: string;
       };
       items: Array<{
         sku: string;
@@ -126,14 +126,10 @@ type ActionResult =
 
 export const loader = async ({
   request,
-}: LoaderFunctionArgs): Promise<LoaderData> => {
+}: LoaderFunctionArgs) => {
   await authenticate.admin(request);
 
-  // Import history will be connected to Prisma
-  // after the schema is updated.
-  return {
-    importHistory: [],
-  };
+  return {};
 };
 
 // ============================================================
@@ -235,7 +231,7 @@ function parseAviz(text: string): ParsedAviz {
   // ----------------------------------------------------------
 
   const deliveryAddressMatch = normalized.match(
-    /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\. com\.|\nNr\.\s*crt)/i,
+    /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt)/i,
   );
 
   if (!deliveryAddressMatch) {
@@ -244,10 +240,9 @@ function parseAviz(text: string): ParsedAviz {
     );
   }
 
-  const clientAddress =
-    deliveryAddressMatch[1]
-      .replace(/\s+/g, " ")
-      .trim();
+  const clientAddress = deliveryAddressMatch[1]
+    .replace(/\s+/g, " ")
+    .trim();
 
   // ----------------------------------------------------------
   // LAST SIMPLE "Adresa:"
@@ -270,10 +265,9 @@ function parseAviz(text: string): ParsedAviz {
       plainAddressMatches.length - 1
     ];
 
-  const locationAddress =
-    lastAddressMatch[1]
-      .replace(/\s+/g, " ")
-      .trim();
+  const locationAddress = lastAddressMatch[1]
+    .replace(/\s+/g, " ")
+    .trim();
 
   // ----------------------------------------------------------
   // SKU + QUANTITY
@@ -484,7 +478,7 @@ async function findSkuInShopify(
 export const action = async ({
   request,
 }: ActionFunctionArgs): Promise<ActionResult> => {
-  const { admin } =
+  const { admin, session } =
     await authenticate.admin(request);
 
   try {
@@ -506,7 +500,7 @@ export const action = async ({
 
     if (createTransfer) {
       console.log(
-        "[SMARTBILL] CREATE BRANCH START",
+        "[SMARTBILL] CREATE TRANSFER START",
         new Date().toISOString(),
       );
 
@@ -565,6 +559,28 @@ export const action = async ({
         };
       }
 
+      // ------------------------------------------------------
+      // DUPLICATE CHECK
+      // ------------------------------------------------------
+
+      const existingImport =
+        await prisma.importHistory.findUnique({
+          where: {
+            shop_avizNumber: {
+              shop: session.shop,
+              avizNumber: aviz.number,
+            },
+          },
+        });
+
+      if (existingImport) {
+        return {
+          ok: false,
+          error:
+            `Delivery note ${aviz.number} has already been imported as ${existingImport.transferName}.`,
+        };
+      }
+
       console.log(
         "=== SMARTBILL CREATE TRANSFER ===",
       );
@@ -594,7 +610,7 @@ export const action = async ({
       // ------------------------------------------------------
 
       const idempotencyKey =
-        `smartbill-${aviz.number}`;
+        `smartbill-${session.shop}-${aviz.number}`;
 
       const mutation = `#graphql
         mutation CreateInventoryTransfer(
@@ -618,6 +634,7 @@ export const action = async ({
                 name
               }
             }
+
             userErrors {
               field
               message
@@ -729,9 +746,33 @@ export const action = async ({
       const transfer =
         result.inventoryTransfer;
 
+      const adminUrl =
+        getTransferAdminUrl(
+          session.shop,
+          transfer.id,
+        );
+
       console.log(
         "Transfer created:",
         transfer.name,
+      );
+
+      // ------------------------------------------------------
+      // SAVE IMPORT HISTORY
+      // ------------------------------------------------------
+
+      await prisma.importHistory.create({
+        data: {
+          shop: session.shop,
+          avizNumber: aviz.number,
+          transferId: transfer.id,
+          transferName: transfer.name,
+        },
+      });
+
+      console.log(
+        "[SMARTBILL] Import history saved:",
+        aviz.number,
       );
 
       console.log(
@@ -742,7 +783,6 @@ export const action = async ({
       return {
         ok: true,
         mode: "transfer",
-
         transfer: {
           id: transfer.id,
           name: transfer.name,
@@ -753,6 +793,7 @@ export const action = async ({
             transfer.origin.name,
           destination:
             transfer.destination.name,
+          adminUrl,
         },
 
         items: items.map(
@@ -869,7 +910,29 @@ export const action = async ({
     );
 
     // --------------------------------------------------------
-    // 3. LOCATIONS
+    // 3. CHECK IF ALREADY IMPORTED
+    // --------------------------------------------------------
+
+    const existingImport =
+      await prisma.importHistory.findUnique({
+        where: {
+          shop_avizNumber: {
+            shop: session.shop,
+            avizNumber: aviz.number,
+          },
+        },
+      });
+
+    if (existingImport) {
+      return {
+        ok: false,
+        error:
+          `Delivery note ${aviz.number} has already been imported as ${existingImport.transferName}.`,
+      };
+    }
+
+    // --------------------------------------------------------
+    // 4. LOCATIONS
     // --------------------------------------------------------
 
     const originLocation =
@@ -890,6 +953,7 @@ export const action = async ({
         ok: false,
         error:
           "The addresses in the delivery note do not match the configured Shopify locations.",
+
         details: {
           ignoredSupplierAddress:
             aviz.ignoredSupplierAddress,
@@ -921,7 +985,7 @@ export const action = async ({
     }
 
     // --------------------------------------------------------
-    // 4. SKU LOOKUP - IN PARALLEL
+    // 5. SKU LOOKUP - IN PARALLEL
     // --------------------------------------------------------
 
     const skuStarted =
@@ -961,13 +1025,12 @@ export const action = async ({
       );
 
       // ------------------------------------------------------
-      // 5. PREVIEW
+      // 6. PREVIEW
       // ------------------------------------------------------
 
       return {
         ok: true,
         mode: "preview",
-
         aviz,
 
         direction: {
@@ -1010,11 +1073,6 @@ export const action = async ({
 // ============================================================
 
 export default function Index() {
-  const { importHistory } =
-    useLoaderData<
-      typeof loader
-    >();
-
   const fetcher =
     useFetcher<ActionResult>();
 
@@ -1037,19 +1095,22 @@ export default function Index() {
       ? fetcher.data
       : null;
 
+  const transferData =
+    fetcher.data?.ok &&
+    fetcher.data.mode ===
+      "transfer"
+      ? fetcher.data
+      : null;
+
   // ==========================================================
   // TOASTS
   // ==========================================================
 
   useEffect(() => {
-    if (
-      fetcher.data?.ok &&
-      fetcher.data.mode ===
-        "transfer"
-    ) {
+    if (transferData) {
       shopify.toast.show(
         `Transfer created for ${
-          fetcher.data.transfer
+          transferData.transfer
             .referenceName ??
           "delivery note"
         }.`,
@@ -1067,6 +1128,7 @@ export default function Index() {
   }, [
     fetcher.data,
     shopify,
+    transferData,
   ]);
 
   // ==========================================================
@@ -1398,9 +1460,7 @@ export default function Index() {
           TRANSFER CREATED
       ==================================================== */}
 
-      {fetcher.data?.ok &&
-      fetcher.data.mode ===
-        "transfer" ? (
+      {transferData ? (
         <s-section
           heading="Transfer Created"
         >
@@ -1410,10 +1470,10 @@ export default function Index() {
           >
             <s-heading>
               {
-                fetcher.data
+                transferData
                   .transfer
                   .referenceName ??
-                fetcher.data
+                transferData
                   .transfer
                   .name
               }
@@ -1424,7 +1484,7 @@ export default function Index() {
                 Shopify Transfer:
               </strong>{" "}
               {
-                fetcher.data
+                transferData
                   .transfer
                   .name
               }
@@ -1435,7 +1495,7 @@ export default function Index() {
                 Status:
               </strong>{" "}
               {
-                fetcher.data
+                transferData
                   .transfer
                   .status
               }
@@ -1446,32 +1506,25 @@ export default function Index() {
                 Direction:
               </strong>{" "}
               {
-                fetcher.data
+                transferData
                   .transfer
                   .origin
               }
               {" → "}
               {
-                fetcher.data
+                transferData
                   .transfer
                   .destination
               }
             </s-paragraph>
 
             <s-button
-              onClick={() => {
-                if (
-                  fetcher.data?.ok &&
-                  fetcher.data.mode === "transfer"
-                ) {
-                  window.open(
-                    getTransferAdminUrl(
-                      fetcher.data.transfer.id,
-                    ),
-                    "_blank",
-                  );
-                }
-              }}
+              href={
+                transferData
+                  .transfer
+                  .adminUrl
+              }
+              target="_blank"
             >
               View transfer
             </s-button>
@@ -1482,7 +1535,7 @@ export default function Index() {
               Transferred Products
             </s-heading>
 
-            {fetcher.data.items.map(
+            {transferData.items.map(
               (item) => (
                 <s-box
                   key={item.sku}
@@ -1513,87 +1566,6 @@ export default function Index() {
           </s-stack>
         </s-section>
       ) : null}
-
-      {/* ====================================================
-          IMPORT HISTORY
-      ==================================================== */}
-
-      <s-section
-        heading="Import History"
-      >
-        <s-stack
-          direction="block"
-          gap="base"
-        >
-          <s-stack
-            direction="inline"
-            gap="base"
-          >
-            <s-button
-              onClick={() => {
-                window.open(
-                  SHOPIFY_ADMIN_TRANSFERS_PATH,
-                  "_blank",
-                );
-              }}
-            >
-              View all transfers
-            </s-button>
-          </s-stack>
-
-          {importHistory.length ===
-          0 ? (
-            <s-paragraph>
-              No imports yet.
-            </s-paragraph>
-          ) : (
-            importHistory.map(
-              (item) => (
-                <s-box
-                  key={item.id}
-                  padding="base"
-                  borderWidth="base"
-                  borderRadius="base"
-                >
-                  <s-stack
-                    direction="inline"
-                    gap="base"
-                  >
-                    <span>
-                      <strong>
-                        {item.avizNumber}
-                      </strong>
-                    </span>
-
-                    <span>
-                      →
-                    </span>
-
-                    <span>
-                      <strong>
-                        {item.transferName}
-                      </strong>
-                    </span>
-
-                    <s-button
-                      onClick={() => {
-                        window.open(
-                          getTransferAdminUrl(
-                            item.transferId,
-                          ),
-                          "_blank",
-                        );
-                      }}
-                    >
-                      View transfer
-                    </s-button>
-                  </s-stack>
-                </s-box>
-              ),
-            )
-          )}
-        </s-stack>
-      </s-section>
     </s-page>
   );
 }

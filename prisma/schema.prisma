@@ -32,11 +32,12 @@ model Session {
 
 model ImportHistory {
   id           String   @id @default(cuid())
+  shop         String
   avizNumber   String
   transferId   String
   transferName String
   createdAt    DateTime @default(now())
 
-  @@index([avizNumber])
+  @@unique([shop, avizNumber])
   @@index([createdAt])
 }
