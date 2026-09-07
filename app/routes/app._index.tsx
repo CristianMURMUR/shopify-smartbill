@@ -6,7 +6,7 @@ import type {
   LoaderFunctionArgs,
 } from "react-router";
 
-import { useFetcher } from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -24,6 +24,24 @@ const LOCATION_3_ID = "gid://shopify/Location/86611919034";
 const LOCATION_3_NAME = "My Custom Location";
 const LOCATION_3_ADDRESS =
   "MURMUR ELECTROMAGNETICA, Calea Rahovei 266-288, corp 3, etaj 2, Sector 5, Bucuresti";
+
+// ============================================================
+// SHOPIFY ADMIN URL
+// ============================================================
+
+const SHOPIFY_ADMIN_TRANSFERS_PATH =
+  "/admin/inventory/transfers";
+
+function getTransferAdminUrl(
+  transferId: string,
+) {
+  const numericId =
+    transferId.split("/").pop();
+
+  return numericId
+    ? `${SHOPIFY_ADMIN_TRANSFERS_PATH}/${numericId}`
+    : SHOPIFY_ADMIN_TRANSFERS_PATH;
+}
 
 // ============================================================
 // TYPES
@@ -54,6 +72,18 @@ type TransferItem = {
 type TransferLocation = {
   id: string;
   name: string;
+};
+
+type ImportHistoryItem = {
+  id: string;
+  avizNumber: string;
+  transferId: string;
+  transferName: string;
+  createdAt: string;
+};
+
+type LoaderData = {
+  importHistory: ImportHistoryItem[];
 };
 
 type ActionResult =
@@ -96,9 +126,14 @@ type ActionResult =
 
 export const loader = async ({
   request,
-}: LoaderFunctionArgs) => {
+}: LoaderFunctionArgs): Promise<LoaderData> => {
   await authenticate.admin(request);
-  return null;
+
+  // Import history will be connected to Prisma
+  // after the schema is updated.
+  return {
+    importHistory: [],
+  };
 };
 
 // ============================================================
@@ -186,9 +221,6 @@ function parseAviz(text: string): ParsedAviz {
 
   // ----------------------------------------------------------
   // FIRST ADDRESS = IGNORE
-  //
-  // This is the supplier/Miraslau address.
-  // It is intentionally NOT used for the transfer.
   // ----------------------------------------------------------
 
   const supplierAddressMatch = normalized.match(
@@ -212,15 +244,13 @@ function parseAviz(text: string): ParsedAviz {
     );
   }
 
-  const clientAddress = deliveryAddressMatch[1]
-    .replace(/\s+/g, " ")
-    .trim();
+  const clientAddress =
+    deliveryAddressMatch[1]
+      .replace(/\s+/g, " ")
+      .trim();
 
   // ----------------------------------------------------------
   // LAST SIMPLE "Adresa:"
-  //
-  // This is the warehouse/location address.
-  // The first simple address (Miraslau) is ignored.
   // ----------------------------------------------------------
 
   const plainAddressMatches = [
@@ -240,9 +270,10 @@ function parseAviz(text: string): ParsedAviz {
       plainAddressMatches.length - 1
     ];
 
-  const locationAddress = lastAddressMatch[1]
-    .replace(/\s+/g, " ")
-    .trim();
+  const locationAddress =
+    lastAddressMatch[1]
+      .replace(/\s+/g, " ")
+      .trim();
 
   // ----------------------------------------------------------
   // SKU + QUANTITY
@@ -257,9 +288,11 @@ function parseAviz(text: string): ParsedAviz {
   const items: AvizItem[] = [];
 
   for (let i = 0; i < skuMatches.length; i++) {
-    const sku = skuMatches[i][1].toUpperCase();
+    const sku =
+      skuMatches[i][1].toUpperCase();
 
-    const start = skuMatches[i].index ?? 0;
+    const start =
+      skuMatches[i].index ?? 0;
 
     const end =
       i + 1 < skuMatches.length
@@ -267,11 +300,15 @@ function parseAviz(text: string): ParsedAviz {
           normalized.length
         : normalized.length;
 
-    const block = normalized.slice(start, end);
-
-    const quantityMatch = block.match(
-      /\bbuc\s+(\d+(?:[.,]\d+)?)\b/i,
+    const block = normalized.slice(
+      start,
+      end,
     );
+
+    const quantityMatch =
+      block.match(
+        /\bbuc\s+(\d+(?:[.,]\d+)?)\b/i,
+      );
 
     if (!quantityMatch) {
       throw new Error(
@@ -305,7 +342,8 @@ function parseAviz(text: string): ParsedAviz {
   }
 
   return {
-    number: numberMatch[1].toUpperCase(),
+    number:
+      numberMatch[1].toUpperCase(),
     date,
     ignoredSupplierAddress,
     clientAddress,
@@ -318,24 +356,31 @@ function parseAviz(text: string): ParsedAviz {
 // PDF TEXT EXTRACTION
 // ============================================================
 
-async function extractPdfText(file: File) {
+async function extractPdfText(
+  file: File,
+) {
   const started = performance.now();
 
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+  const arrayBuffer =
+    await file.arrayBuffer();
+
+  const buffer =
+    Buffer.from(arrayBuffer);
 
   console.log(
     `[SMARTBILL] PDF received: ${file.name} (${buffer.length} bytes)`,
   );
 
-  const { PDFParse } = await import("pdf-parse");
+  const { PDFParse } =
+    await import("pdf-parse");
 
   const parser = new PDFParse({
     data: buffer,
   });
 
   try {
-    const result = await parser.getText();
+    const result =
+      await parser.getText();
 
     console.log(
       `[SMARTBILL] PDF parse: ${(performance.now() - started).toFixed(0)} ms`,
@@ -359,34 +404,36 @@ async function findSkuInShopify(
   admin: any,
   sku: string,
 ): Promise<TransferItem> {
-  const response = await admin.graphql(
-    `#graphql
-      query FindVariantBySku($query: String!) {
-        productVariants(
-          first: 10
-          query: $query
-        ) {
-          nodes {
-            sku
-            title
-            product {
+  const response =
+    await admin.graphql(
+      `#graphql
+        query FindVariantBySku($query: String!) {
+          productVariants(
+            first: 10
+            query: $query
+          ) {
+            nodes {
+              sku
               title
-            }
-            inventoryItem {
-              id
+              product {
+                title
+              }
+              inventoryItem {
+                id
+              }
             }
           }
         }
-      }
-    `,
-    {
-      variables: {
-        query: `sku:${sku}`,
+      `,
+      {
+        variables: {
+          query: `sku:${sku}`,
+        },
       },
-    },
-  );
+    );
 
-  const json = (await response.json()) as any;
+  const json =
+    (await response.json()) as any;
 
   if (json.errors) {
     throw new Error(
@@ -395,7 +442,8 @@ async function findSkuInShopify(
   }
 
   const nodes =
-    json.data?.productVariants?.nodes ?? [];
+    json.data?.productVariants?.nodes ??
+    [];
 
   const variant = nodes.find(
     (node: any) =>
@@ -409,7 +457,9 @@ async function findSkuInShopify(
     );
   }
 
-  if (!variant.inventoryItem?.id) {
+  if (
+    !variant.inventoryItem?.id
+  ) {
     throw new Error(
       `SKU ${sku} does not have an Inventory Item in Shopify.`,
     );
@@ -443,10 +493,12 @@ export const action = async ({
       new Date().toISOString(),
     );
 
-    const formData = await request.formData();
+    const formData =
+      await request.formData();
 
     const createTransfer =
-      formData.get("createTransfer") === "true";
+      formData.get("createTransfer") ===
+      "true";
 
     // ========================================================
     // CREATE TRANSFER
@@ -462,7 +514,8 @@ export const action = async ({
         formData.get("transferData");
 
       if (
-        typeof transferDataRaw !== "string"
+        typeof transferDataRaw !==
+        "string"
       ) {
         return {
           ok: false,
@@ -479,9 +532,10 @@ export const action = async ({
       };
 
       try {
-        transferData = JSON.parse(
-          transferDataRaw,
-        );
+        transferData =
+          JSON.parse(
+            transferDataRaw,
+          );
       } catch {
         return {
           ok: false,
@@ -515,15 +569,21 @@ export const action = async ({
         "=== SMARTBILL CREATE TRANSFER ===",
       );
 
-      console.log("Delivery note:", aviz.number);
+      console.log(
+        "Delivery note:",
+        aviz.number,
+      );
+
       console.log(
         "Origin:",
         originLocation.name,
       );
+
       console.log(
         "Destination:",
         destinationLocation.name,
       );
+
       console.log(
         "Products:",
         items.length,
@@ -571,47 +631,48 @@ export const action = async ({
         new Date().toISOString(),
       );
 
-      const started = performance.now();
+      const started =
+        performance.now();
 
-      const response = await admin.graphql(
-        mutation,
-        {
-          variables: {
-            input: {
-              originLocationId:
-                originLocation.id,
+      const response =
+        await admin.graphql(
+          mutation,
+          {
+            variables: {
+              input: {
+                originLocationId:
+                  originLocation.id,
 
-              destinationLocationId:
-                destinationLocation.id,
+                destinationLocationId:
+                  destinationLocation.id,
 
-              // Shopify's system-generated transfer name
-              // remains #Txxxx. The delivery note number
-              // is stored as the editable reference name.
-              referenceName:
-                aviz.number,
+                referenceName:
+                  aviz.number,
 
-              dateCreated: aviz.date
-                ? `${aviz.date}T00:00:00Z`
-                : undefined,
+                dateCreated:
+                  aviz.date
+                    ? `${aviz.date}T00:00:00Z`
+                    : undefined,
 
-              note:
-                `SmartBill delivery note ${aviz.number}`,
+                note:
+                  `SmartBill delivery note ${aviz.number}`,
 
-              lineItems: items.map(
-                (item) => ({
-                  inventoryItemId:
-                    item.inventoryItemId,
+                lineItems:
+                  items.map(
+                    (item) => ({
+                      inventoryItemId:
+                        item.inventoryItemId,
 
-                  quantity:
-                    item.quantity,
-                }),
-              ),
+                      quantity:
+                        item.quantity,
+                    }),
+                  ),
+              },
+
+              idempotencyKey,
             },
-
-            idempotencyKey,
           },
-        },
-      );
+        );
 
       const json =
         (await response.json()) as any;
@@ -630,7 +691,8 @@ export const action = async ({
       }
 
       const result =
-        json.data?.inventoryTransferCreate;
+        json.data
+          ?.inventoryTransferCreate;
 
       if (!result) {
         return {
@@ -641,16 +703,21 @@ export const action = async ({
         };
       }
 
-      if (result.userErrors?.length) {
+      if (
+        result.userErrors?.length
+      ) {
         return {
           ok: false,
           error:
             "Shopify rejected the transfer creation.",
-          details: result.userErrors,
+          details:
+            result.userErrors,
         };
       }
 
-      if (!result.inventoryTransfer) {
+      if (
+        !result.inventoryTransfer
+      ) {
         return {
           ok: false,
           error:
@@ -691,7 +758,8 @@ export const action = async ({
         items: items.map(
           (item) => ({
             sku: item.sku,
-            quantity: item.quantity,
+            quantity:
+              item.quantity,
             inventoryItemId:
               item.inventoryItemId,
           }),
@@ -703,7 +771,8 @@ export const action = async ({
     // PREVIEW
     // ========================================================
 
-    const file = formData.get("pdf");
+    const file =
+      formData.get("pdf");
 
     if (!(file instanceof File)) {
       return {
@@ -722,7 +791,8 @@ export const action = async ({
     }
 
     const isPdf =
-      file.type === "application/pdf" ||
+      file.type ===
+        "application/pdf" ||
       file.name
         .toLowerCase()
         .endsWith(".pdf");
@@ -761,7 +831,8 @@ export const action = async ({
     let aviz: ParsedAviz;
 
     try {
-      aviz = parseAviz(avizText);
+      aviz =
+        parseAviz(avizText);
     } catch (error) {
       return {
         ok: false,
@@ -939,6 +1010,11 @@ export const action = async ({
 // ============================================================
 
 export default function Index() {
+  const { importHistory } =
+    useLoaderData<
+      typeof loader
+    >();
+
   const fetcher =
     useFetcher<ActionResult>();
 
@@ -956,7 +1032,8 @@ export default function Index() {
 
   const previewData =
     fetcher.data?.ok &&
-    fetcher.data.mode === "preview"
+    fetcher.data.mode ===
+      "preview"
       ? fetcher.data
       : null;
 
@@ -967,10 +1044,15 @@ export default function Index() {
   useEffect(() => {
     if (
       fetcher.data?.ok &&
-      fetcher.data.mode === "transfer"
+      fetcher.data.mode ===
+        "transfer"
     ) {
       shopify.toast.show(
-        `Transfer created for ${fetcher.data.transfer.referenceName ?? "delivery note"}.`,
+        `Transfer created for ${
+          fetcher.data.transfer
+            .referenceName ??
+          "delivery note"
+        }.`,
       );
     }
 
@@ -1045,6 +1127,7 @@ export default function Index() {
       shopify.toast.show(
         "The transfer locations could not be identified.",
       );
+
       return;
     }
 
@@ -1087,6 +1170,10 @@ export default function Index() {
     <s-page
       heading="SmartBill Transfer Importer"
     >
+      {/* ====================================================
+          IMPORT
+      ==================================================== */}
+
       <s-section
         heading="Import SmartBill Delivery Note"
       >
@@ -1095,8 +1182,8 @@ export default function Index() {
           gap="base"
         >
           <s-paragraph>
-            Upload a SmartBill delivery note in PDF format.
-            The PDF will be processed automatically.
+            Upload a SmartBill delivery
+            note in PDF format.
           </s-paragraph>
 
           <input
@@ -1158,9 +1245,9 @@ export default function Index() {
         </s-stack>
       </s-section>
 
-      {/* =====================================================
+      {/* ====================================================
           PREVIEW
-      ===================================================== */}
+      ==================================================== */}
 
       {previewData ? (
         <s-section
@@ -1282,9 +1369,9 @@ export default function Index() {
         </s-section>
       ) : null}
 
-      {/* =====================================================
+      {/* ====================================================
           ERROR
-      ===================================================== */}
+      ==================================================== */}
 
       {fetcher.data &&
       !fetcher.data.ok ? (
@@ -1307,9 +1394,9 @@ export default function Index() {
         </s-section>
       ) : null}
 
-      {/* =====================================================
+      {/* ====================================================
           TRANSFER CREATED
-      ===================================================== */}
+      ==================================================== */}
 
       {fetcher.data?.ok &&
       fetcher.data.mode ===
@@ -1345,18 +1432,6 @@ export default function Index() {
 
             <s-paragraph>
               <strong>
-                Delivery Note:
-              </strong>{" "}
-              {
-                fetcher.data
-                  .transfer
-                  .referenceName ??
-                "Not specified"
-              }
-            </s-paragraph>
-
-            <s-paragraph>
-              <strong>
                 Status:
               </strong>{" "}
               {
@@ -1382,6 +1457,24 @@ export default function Index() {
                   .destination
               }
             </s-paragraph>
+
+            <s-button
+              onClick={() => {
+                if (
+                  fetcher.data?.ok &&
+                  fetcher.data.mode === "transfer"
+                ) {
+                  window.open(
+                    getTransferAdminUrl(
+                      fetcher.data.transfer.id,
+                    ),
+                    "_blank",
+                  );
+                }
+              }}
+            >
+              View transfer
+            </s-button>
 
             <s-divider />
 
@@ -1420,6 +1513,87 @@ export default function Index() {
           </s-stack>
         </s-section>
       ) : null}
+
+      {/* ====================================================
+          IMPORT HISTORY
+      ==================================================== */}
+
+      <s-section
+        heading="Import History"
+      >
+        <s-stack
+          direction="block"
+          gap="base"
+        >
+          <s-stack
+            direction="inline"
+            gap="base"
+          >
+            <s-button
+              onClick={() => {
+                window.open(
+                  SHOPIFY_ADMIN_TRANSFERS_PATH,
+                  "_blank",
+                );
+              }}
+            >
+              View all transfers
+            </s-button>
+          </s-stack>
+
+          {importHistory.length ===
+          0 ? (
+            <s-paragraph>
+              No imports yet.
+            </s-paragraph>
+          ) : (
+            importHistory.map(
+              (item) => (
+                <s-box
+                  key={item.id}
+                  padding="base"
+                  borderWidth="base"
+                  borderRadius="base"
+                >
+                  <s-stack
+                    direction="inline"
+                    gap="base"
+                  >
+                    <span>
+                      <strong>
+                        {item.avizNumber}
+                      </strong>
+                    </span>
+
+                    <span>
+                      →
+                    </span>
+
+                    <span>
+                      <strong>
+                        {item.transferName}
+                      </strong>
+                    </span>
+
+                    <s-button
+                      onClick={() => {
+                        window.open(
+                          getTransferAdminUrl(
+                            item.transferId,
+                          ),
+                          "_blank",
+                        );
+                      }}
+                    >
+                      View transfer
+                    </s-button>
+                  </s-stack>
+                </s-box>
+              ),
+            )
+          )}
+        </s-stack>
+      </s-section>
     </s-page>
   );
 }
