@@ -15,21 +15,13 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 // SHOPIFY LOCATIONS
 // ============================================================
 
-const LOCATION_1_ID =
-  "gid://shopify/Location/86611853498";
-
-const LOCATION_1_NAME =
-  "Shop location";
-
+const LOCATION_1_ID = "gid://shopify/Location/86611853498";
+const LOCATION_1_NAME = "Shop location";
 const LOCATION_1_ADDRESS =
   "Calea Floreasca nr 244-246, Sector 1, Jud.: Bucuresti";
 
-const LOCATION_3_ID =
-  "gid://shopify/Location/86611919034";
-
-const LOCATION_3_NAME =
-  "My Custom Location";
-
+const LOCATION_3_ID = "gid://shopify/Location/86611919034";
+const LOCATION_3_NAME = "My Custom Location";
 const LOCATION_3_ADDRESS =
   "MURMUR ELECTROMAGNETICA, Calea Rahovei 266-288, corp 3, etaj 2, Sector 5, Bucuresti";
 
@@ -106,7 +98,6 @@ export const loader = async ({
   request,
 }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
-
   return null;
 };
 
@@ -156,9 +147,7 @@ function getLocationByAddress(
 // PDF PARSER
 // ============================================================
 
-function parseAviz(
-  text: string,
-): ParsedAviz {
+function parseAviz(text: string): ParsedAviz {
   const normalized = text
     .replace(/\r/g, "")
     .replace(/[ \t]+/g, " ")
@@ -169,10 +158,9 @@ function parseAviz(
   // AVIZ NUMBER
   // ----------------------------------------------------------
 
-  const numberMatch =
-    normalized.match(
-      /\b(AVIZ[A-Z0-9-]+)\b/i,
-    );
+  const numberMatch = normalized.match(
+    /\b(AVIZ[A-Z0-9-]+)\b/i,
+  );
 
   if (!numberMatch) {
     throw new Error(
@@ -184,10 +172,9 @@ function parseAviz(
   // DATE
   // ----------------------------------------------------------
 
-  const dateMatch =
-    normalized.match(
-      /Data\s+emiterii\s*:\s*(\d{2})\/(\d{2})\/(\d{4})/i,
-    );
+  const dateMatch = normalized.match(
+    /Data\s+emiterii\s*:\s*(\d{2})\/(\d{2})\/(\d{4})/i,
+  );
 
   if (!dateMatch) {
     throw new Error(
@@ -195,8 +182,7 @@ function parseAviz(
     );
   }
 
-  const date =
-    `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+  const date = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
 
   // ----------------------------------------------------------
   // FIRST ADDRESS = IGNORE
@@ -205,10 +191,9 @@ function parseAviz(
   // It is intentionally NOT used for the transfer.
   // ----------------------------------------------------------
 
-  const supplierAddressMatch =
-    normalized.match(
-      /Furnizor\s+Client[\s\S]*?Adresa:\s*([^\n]+)/i,
-    );
+  const supplierAddressMatch = normalized.match(
+    /Furnizor\s+Client[\s\S]*?Adresa:\s*([^\n]+)/i,
+  );
 
   const ignoredSupplierAddress =
     supplierAddressMatch?.[1]?.trim() ?? "";
@@ -217,10 +202,9 @@ function parseAviz(
   // DELIVERY ADDRESS = CLIENT
   // ----------------------------------------------------------
 
-  const deliveryAddressMatch =
-    normalized.match(
-      /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\. com\.|\nNr\.\s*crt)/i,
-    );
+  const deliveryAddressMatch = normalized.match(
+    /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\. com\.|\nNr\.\s*crt)/i,
+  );
 
   if (!deliveryAddressMatch) {
     throw new Error(
@@ -228,10 +212,9 @@ function parseAviz(
     );
   }
 
-  const clientAddress =
-    deliveryAddressMatch[1]
-      .replace(/\s+/g, " ")
-      .trim();
+  const clientAddress = deliveryAddressMatch[1]
+    .replace(/\s+/g, " ")
+    .trim();
 
   // ----------------------------------------------------------
   // LAST SIMPLE "Adresa:"
@@ -246,9 +229,7 @@ function parseAviz(
     ),
   ];
 
-  if (
-    plainAddressMatches.length === 0
-  ) {
+  if (plainAddressMatches.length === 0) {
     throw new Error(
       "Nu am putut identifica adresa locatiei.",
     );
@@ -259,10 +240,9 @@ function parseAviz(
       plainAddressMatches.length - 1
     ];
 
-  const locationAddress =
-    lastAddressMatch[1]
-      .replace(/\s+/g, " ")
-      .trim();
+  const locationAddress = lastAddressMatch[1]
+    .replace(/\s+/g, " ")
+    .trim();
 
   // ----------------------------------------------------------
   // SKU + QUANTITY
@@ -276,16 +256,10 @@ function parseAviz(
 
   const items: AvizItem[] = [];
 
-  for (
-    let i = 0;
-    i < skuMatches.length;
-    i++
-  ) {
-    const sku =
-      skuMatches[i][1].toUpperCase();
+  for (let i = 0; i < skuMatches.length; i++) {
+    const sku = skuMatches[i][1].toUpperCase();
 
-    const start =
-      skuMatches[i].index ?? 0;
+    const start = skuMatches[i].index ?? 0;
 
     const end =
       i + 1 < skuMatches.length
@@ -293,13 +267,11 @@ function parseAviz(
           normalized.length
         : normalized.length;
 
-    const block =
-      normalized.slice(start, end);
+    const block = normalized.slice(start, end);
 
-    const quantityMatch =
-      block.match(
-        /\bbuc\s+(\d+(?:[.,]\d+)?)\b/i,
-      );
+    const quantityMatch = block.match(
+      /\bbuc\s+(\d+(?:[.,]\d+)?)\b/i,
+    );
 
     if (!quantityMatch) {
       throw new Error(
@@ -307,13 +279,9 @@ function parseAviz(
       );
     }
 
-    const quantity =
-      Number(
-        quantityMatch[1].replace(
-          ",",
-          ".",
-        ),
-      );
+    const quantity = Number(
+      quantityMatch[1].replace(",", "."),
+    );
 
     if (
       !Number.isFinite(quantity) ||
@@ -337,17 +305,11 @@ function parseAviz(
   }
 
   return {
-    number:
-      numberMatch[1].toUpperCase(),
-
+    number: numberMatch[1].toUpperCase(),
     date,
-
     ignoredSupplierAddress,
-
     clientAddress,
-
     locationAddress,
-
     items,
   };
 }
@@ -356,36 +318,24 @@ function parseAviz(
 // PDF TEXT EXTRACTION
 // ============================================================
 
-async function extractPdfText(
-  file: File,
-) {
+async function extractPdfText(file: File) {
+  const started = performance.now();
 
-  console.log("[SMARTBILL] BEFORE CREATE", new Date().toISOString());
-
-  const started =
-    performance.now();
-
-  const arrayBuffer =
-    await file.arrayBuffer();
-
-  const buffer =
-    Buffer.from(arrayBuffer);
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
 
   console.log(
     `[SMARTBILL] PDF primit: ${file.name} (${buffer.length} bytes)`,
   );
 
-  const { PDFParse } =
-    await import("pdf-parse");
+  const { PDFParse } = await import("pdf-parse");
 
-  const parser =
-    new PDFParse({
-      data: buffer,
-    });
+  const parser = new PDFParse({
+    data: buffer,
+  });
 
   try {
-    const result =
-      await parser.getText();
+    const result = await parser.getText();
 
     console.log(
       `[SMARTBILL] PDF parse: ${(performance.now() - started).toFixed(0)} ms`,
@@ -409,36 +359,34 @@ async function findSkuInShopify(
   admin: any,
   sku: string,
 ): Promise<TransferItem> {
-  const response =
-    await admin.graphql(
-      `#graphql
-        query FindVariantBySku($query: String!) {
-          productVariants(
-            first: 10
-            query: $query
-          ) {
-            nodes {
-              sku
+  const response = await admin.graphql(
+    `#graphql
+      query FindVariantBySku($query: String!) {
+        productVariants(
+          first: 10
+          query: $query
+        ) {
+          nodes {
+            sku
+            title
+            product {
               title
-              product {
-                title
-              }
-              inventoryItem {
-                id
-              }
+            }
+            inventoryItem {
+              id
             }
           }
         }
-      `,
-      {
-        variables: {
-          query: `sku:${sku}`,
-        },
+      }
+    `,
+    {
+      variables: {
+        query: `sku:${sku}`,
       },
-    );
+    },
+  );
 
-  const json =
-    (await response.json()) as any;
+  const json = (await response.json()) as any;
 
   if (json.errors) {
     throw new Error(
@@ -447,15 +395,13 @@ async function findSkuInShopify(
   }
 
   const nodes =
-    json.data?.productVariants?.nodes ??
-    [];
+    json.data?.productVariants?.nodes ?? [];
 
-  const variant =
-    nodes.find(
-      (node: any) =>
-        node.sku?.toUpperCase() ===
-        sku.toUpperCase(),
-    );
+  const variant = nodes.find(
+    (node: any) =>
+      node.sku?.toUpperCase() ===
+      sku.toUpperCase(),
+  );
 
   if (!variant) {
     throw new Error(
@@ -473,8 +419,7 @@ async function findSkuInShopify(
     sku,
     quantity: 0,
     productTitle:
-      variant.product?.title ??
-      "",
+      variant.product?.title ?? "",
     variantTitle:
       variant.title ?? "",
     inventoryItemId:
@@ -493,19 +438,15 @@ export const action = async ({
     await authenticate.admin(request);
 
   try {
-    console.log("[SMARTBILL] REQUEST START", new Date().toISOString());
+    console.log(
+      "[SMARTBILL] REQUEST START",
+      new Date().toISOString(),
+    );
 
-    const formData =
-      await request.formData();
+    const formData = await request.formData();
 
     const createTransfer =
-      formData.get(
-        "createTransfer",
-      ) === "true";
-
-
-
-
+      formData.get("createTransfer") === "true";
 
     // ========================================================
     // CREATE TRANSFER
@@ -520,14 +461,16 @@ export const action = async ({
     // ========================================================
 
     if (createTransfer) {
+      console.log(
+        "[SMARTBILL] CREATE BRANCH START",
+        new Date().toISOString(),
+      );
+
       const transferDataRaw =
-        formData.get(
-          "transferData",
-        );
+        formData.get("transferData");
 
       if (
-        typeof transferDataRaw !==
-        "string"
+        typeof transferDataRaw !== "string"
       ) {
         return {
           ok: false,
@@ -544,10 +487,9 @@ export const action = async ({
       };
 
       try {
-        transferData =
-          JSON.parse(
-            transferDataRaw,
-          );
+        transferData = JSON.parse(
+          transferDataRaw,
+        );
       } catch {
         return {
           ok: false,
@@ -581,26 +523,19 @@ export const action = async ({
         "=== SMARTBILL CREATE TRANSFER ===",
       );
 
-      console.log(
-        "Aviz:",
-        aviz.number,
-      );
-
+      console.log("Aviz:", aviz.number);
       console.log(
         "Origin:",
         originLocation.name,
       );
-
       console.log(
         "Destination:",
         destinationLocation.name,
       );
-
       console.log(
-        "Produse:",
+        "Products:",
         items.length,
       );
-      
 
       // ------------------------------------------------------
       // IDEMPOTENCY KEY
@@ -612,8 +547,7 @@ export const action = async ({
       const idempotencyKey =
         `smartbill-${aviz.number}`;
 
-      const mutation = `
-        #graphql
+      const mutation = `#graphql
         mutation CreateInventoryTransfer(
           $input: InventoryTransferCreateInput!
           $idempotencyKey: String!
@@ -643,48 +577,49 @@ export const action = async ({
         }
       `;
 
-      const started =
-        performance.now();
+      console.log(
+        "[SMARTBILL] BEFORE SHOPIFY CREATE",
+        new Date().toISOString(),
+      );
 
-      const response =
-        await admin.graphql(
-          mutation,
-          {
-            variables: {
-              input: {
-                originLocationId:
-                  originLocation.id,
+      const started = performance.now();
 
-                destinationLocationId:
-                  destinationLocation.id,
+      const response = await admin.graphql(
+        mutation,
+        {
+          variables: {
+            input: {
+              originLocationId:
+                originLocation.id,
 
-                referenceName:
-                  aviz.number,
+              destinationLocationId:
+                destinationLocation.id,
 
-                dateCreated:
-                  aviz.date
-                    ? `${aviz.date}T00:00:00Z`
-                    : undefined,
+              referenceName:
+                aviz.number,
 
-                note:
-                  `Import SmartBill ${aviz.number}`,
+              dateCreated: aviz.date
+                ? `${aviz.date}T00:00:00Z`
+                : undefined,
 
-                lineItems:
-                  items.map(
-                    (item) => ({
-                      inventoryItemId:
-                        item.inventoryItemId,
+              note:
+                `Import SmartBill ${aviz.number}`,
 
-                      quantity:
-                        item.quantity,
-                    }),
-                  ),
-              },
+              lineItems: items.map(
+                (item) => ({
+                  inventoryItemId:
+                    item.inventoryItemId,
 
-              idempotencyKey,
+                  quantity:
+                    item.quantity,
+                }),
+              ),
             },
+
+            idempotencyKey,
           },
-        );
+        },
+      );
 
       const json =
         (await response.json()) as any;
@@ -698,46 +633,37 @@ export const action = async ({
           ok: false,
           error:
             "Eroare Shopify la crearea transferului.",
-          details:
-            json.errors,
+          details: json.errors,
         };
       }
 
       const result =
-        json.data
-          ?.inventoryTransferCreate;
+        json.data?.inventoryTransferCreate;
 
       if (!result) {
         return {
           ok: false,
           error:
             "Shopify nu a returnat rezultatul crearii transferului.",
-          details:
-            json,
+          details: json,
         };
       }
 
-      if (
-        result.userErrors?.length
-      ) {
+      if (result.userErrors?.length) {
         return {
           ok: false,
           error:
             "Shopify a respins crearea transferului.",
-          details:
-            result.userErrors,
+          details: result.userErrors,
         };
       }
 
-      if (
-        !result.inventoryTransfer
-      ) {
+      if (!result.inventoryTransfer) {
         return {
           ok: false,
           error:
             "Shopify nu a returnat transferul creat.",
-          details:
-            result,
+          details: result,
         };
       }
 
@@ -749,45 +675,35 @@ export const action = async ({
         transfer.name,
       );
 
-      console.log("[SMARTBILL] BEFORE RESPONSE", new Date().toISOString());
+      console.log(
+        "[SMARTBILL] BEFORE RESPONSE",
+        new Date().toISOString(),
+      );
 
       return {
         ok: true,
         mode: "transfer",
 
         transfer: {
-          id:
-            transfer.id,
-
-          name:
-            transfer.name,
-
-          status:
-            transfer.status,
-
+          id: transfer.id,
+          name: transfer.name,
+          status: transfer.status,
           referenceName:
             transfer.referenceName,
-
           origin:
             transfer.origin.name,
-
           destination:
             transfer.destination.name,
         },
 
-        items:
-          items.map(
-            (item) => ({
-              sku:
-                item.sku,
-
-              quantity:
-                item.quantity,
-
-              inventoryItemId:
-                item.inventoryItemId,
-            }),
-          ),
+        items: items.map(
+          (item) => ({
+            sku: item.sku,
+            quantity: item.quantity,
+            inventoryItemId:
+              item.inventoryItemId,
+          }),
+        ),
       };
     }
 
@@ -795,8 +711,7 @@ export const action = async ({
     // PREVIEW
     // ========================================================
 
-    const file =
-      formData.get("pdf");
+    const file = formData.get("pdf");
 
     if (!(file instanceof File)) {
       return {
@@ -815,8 +730,7 @@ export const action = async ({
     }
 
     const isPdf =
-      file.type ===
-        "application/pdf" ||
+      file.type === "application/pdf" ||
       file.name
         .toLowerCase()
         .endsWith(".pdf");
@@ -855,8 +769,7 @@ export const action = async ({
     let aviz: ParsedAviz;
 
     try {
-      aviz =
-        parseAviz(avizText);
+      aviz = parseAviz(avizText);
     } catch (error) {
       return {
         ok: false,
@@ -918,7 +831,6 @@ export const action = async ({
         ok: false,
         error:
           "Adresele avizului nu corespund locatiilor configurate.",
-
         details: {
           ignoredSupplierAddress:
             aviz.ignoredSupplierAddress,
@@ -951,18 +863,6 @@ export const action = async ({
 
     // --------------------------------------------------------
     // 4. SKU LOOKUP - IN PARALEL
-    //
-    // Previously:
-    //
-    // SKU 1 -> wait
-    // SKU 2 -> wait
-    // SKU 3 -> wait
-    //
-    // Now:
-    //
-    // SKU 1 ─┐
-    // SKU 2 ─┼-> parallel
-    // SKU 3 ─┘
     // --------------------------------------------------------
 
     const skuStarted =
@@ -996,8 +896,10 @@ export const action = async ({
         "Toate SKU-urile au fost gasite in Shopify.",
       );
 
-      console.log("[SMARTBILL] BEFORE RESPONSE", new Date().toISOString());
-
+      console.log(
+        "[SMARTBILL] BEFORE RESPONSE",
+        new Date().toISOString(),
+      );
 
       // ------------------------------------------------------
       // 5. PREVIEW
@@ -1017,8 +919,7 @@ export const action = async ({
             destinationLocation.name,
         },
 
-        items:
-          foundItems,
+        items: foundItems,
       };
     } catch (error) {
       return {
@@ -1063,13 +964,11 @@ export default function Index() {
     ["loading", "submitting"].includes(
       fetcher.state,
     ) &&
-    fetcher.formMethod ===
-      "POST";
+    fetcher.formMethod === "POST";
 
   const previewData =
     fetcher.data?.ok &&
-    fetcher.data.mode ===
-      "preview"
+    fetcher.data.mode === "preview"
       ? fetcher.data
       : null;
 
@@ -1080,8 +979,7 @@ export default function Index() {
   useEffect(() => {
     if (
       fetcher.data?.ok &&
-      fetcher.data.mode ===
-        "transfer"
+      fetcher.data.mode === "transfer"
     ) {
       shopify.toast.show(
         "Transferul Shopify a fost creat.",
@@ -1139,65 +1037,63 @@ export default function Index() {
   // We DO NOT send the PDF again.
   // ==========================================================
 
-  const createTransfer =
-    () => {
-      if (!previewData) {
-        return;
-      }
+  const createTransfer = () => {
+    if (!previewData) {
+      return;
+    }
 
-      const originLocation =
-        getLocationByAddress(
-          previewData.aviz
-            .locationAddress,
-        );
-
-      const destinationLocation =
-        getLocationByAddress(
-          previewData.aviz
-            .clientAddress,
-        );
-
-      if (
-        !originLocation ||
-        !destinationLocation
-      ) {
-        shopify.toast.show(
-          "Locatiile transferului nu mai pot fi identificate.",
-        );
-
-        return;
-      }
-
-      const formData =
-        new FormData();
-
-      formData.append(
-        "createTransfer",
-        "true",
+    const originLocation =
+      getLocationByAddress(
+        previewData.aviz
+          .locationAddress,
       );
 
-      formData.append(
-        "transferData",
-        JSON.stringify({
-          aviz:
-            previewData.aviz,
-
-          items:
-            previewData.items,
-
-          originLocation,
-
-          destinationLocation,
-        }),
+    const destinationLocation =
+      getLocationByAddress(
+        previewData.aviz
+          .clientAddress,
       );
 
-      fetcher.submit(
-        formData,
-        {
-          method: "POST",
-        },
+    if (
+      !originLocation ||
+      !destinationLocation
+    ) {
+      shopify.toast.show(
+        "Locatiile transferului nu mai pot fi identificate.",
       );
-    };
+      return;
+    }
+
+    const formData =
+      new FormData();
+
+    formData.append(
+      "createTransfer",
+      "true",
+    );
+
+    formData.append(
+      "transferData",
+      JSON.stringify({
+        aviz:
+          previewData.aviz,
+
+        items:
+          previewData.items,
+
+        originLocation,
+
+        destinationLocation,
+      }),
+    );
+
+    fetcher.submit(
+      formData,
+      {
+        method: "POST",
+      },
+    );
+  };
 
   // ==========================================================
   // RENDER
@@ -1208,7 +1104,7 @@ export default function Index() {
       heading="SmartBill Transfer Importer"
     >
       <s-section
-        heading="Importa aviz SmartBill"
+        heading="Import SmartBill Delivery Note"
       >
         <s-stack
           direction="block"
@@ -1223,17 +1119,14 @@ export default function Index() {
             accept="application/pdf,.pdf"
             onChange={(event) => {
               const selectedFile =
-                event.target
-                  .files?.[0] ??
+                event.target.files?.[0] ??
                 null;
 
               setFile(
                 selectedFile,
               );
 
-              if (
-                selectedFile
-              ) {
+              if (selectedFile) {
                 uploadPdf(
                   selectedFile,
                 );
@@ -1252,7 +1145,7 @@ export default function Index() {
                 gap="small"
               >
                 <s-text>
-                  Fisier selectat:
+                  Selected file:
                 </s-text>
 
                 <s-text>
@@ -1263,9 +1156,7 @@ export default function Index() {
                   {(
                     file.size /
                     1024
-                  ).toFixed(
-                    1,
-                  )}{" "}
+                  ).toFixed(1)}{" "}
                   KB
                 </s-text>
 
@@ -1286,7 +1177,7 @@ export default function Index() {
 
       {previewData ? (
         <s-section
-          heading={`Aviz ${previewData.aviz.number}`}
+          heading={`Delivery note ${previewData.aviz.number}`}
         >
           <s-stack
             direction="block"
@@ -1297,8 +1188,7 @@ export default function Index() {
                 Delivery note:
               </strong>{" "}
               {
-                previewData
-                  .aviz
+                previewData.aviz
                   .number
               }
             </s-paragraph>
@@ -1308,8 +1198,7 @@ export default function Index() {
                 Data:
               </strong>{" "}
               {
-                previewData
-                  .aviz
+                previewData.aviz
                   .date ||
                 "nespecificata"
               }
@@ -1320,14 +1209,12 @@ export default function Index() {
                 Direction:
               </strong>{" "}
               {
-                previewData
-                  .direction
+                previewData.direction
                   .origin
               }
               {" → "}
               {
-                previewData
-                  .direction
+                previewData.direction
                   .destination
               }
             </s-paragraph>
@@ -1335,7 +1222,7 @@ export default function Index() {
             <s-divider />
 
             <s-heading>
-              Produse gasite
+              Products:
             </s-heading>
 
             {previewData.items.map(
@@ -1357,7 +1244,7 @@ export default function Index() {
                     </s-text>
 
                     <s-text>
-                      Produs:{" "}
+                      Product:{" "}
                       {
                         item.productTitle
                       }
@@ -1389,8 +1276,7 @@ export default function Index() {
               {...(
                 isLoading
                   ? {
-                      loading:
-                        true,
+                      loading: true,
                     }
                   : {}
               )}
@@ -1486,7 +1372,7 @@ export default function Index() {
             <s-divider />
 
             <s-heading>
-              Produse transferate
+              Transfered products
             </s-heading>
 
             {fetcher.data.items.map(
@@ -1505,12 +1391,12 @@ export default function Index() {
                       {item.sku}
                     </s-text>
 
-                    <s-text>
+                    <span>
                       Cantitate:{" "}
                       {
                         item.quantity
                       }
-                    </s-text>
+                    </span>
                   </s-stack>
                 </s-box>
               ),
