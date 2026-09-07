@@ -1230,7 +1230,7 @@ export default function Index() {
 
   return (
     <s-page
-      heading="SmartBill Transfer Importer"
+      heading="ShopifyBill"
     >
       {/* ====================================================
           IMPORT

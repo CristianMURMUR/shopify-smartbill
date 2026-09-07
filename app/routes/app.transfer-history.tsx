@@ -58,7 +58,7 @@ export default function TransferHistory() {
         ) : (
           <s-table>
             <s-table-header-row>
-              <s-table-header>Aviz number</s-table-header>
+              <s-table-header>Delivery note number</s-table-header>
               <s-table-header>Shopify transfer</s-table-header>
               <s-table-header>Action</s-table-header>
             </s-table-header-row>
