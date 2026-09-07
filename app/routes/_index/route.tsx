@@ -21,34 +21,48 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>SmartBill → Shopify</h1>
+
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Importă rapid avizele SmartBill în Shopify și creează automat
+          transferurile de inventar.
         </p>
+
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
             <label className={styles.label}>
               <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>e.g: my-shop-domain.myshopify.com</span>
+
+              <input
+                className={styles.input}
+                type="text"
+                name="shop"
+                placeholder="my-shop.myshopify.com"
+              />
+
+              <span>Exemplu: my-shop.myshopify.com</span>
             </label>
+
             <button className={styles.button} type="submit">
-              Log in
+              Log in to Shopify
             </button>
           </Form>
         )}
+
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Import rapid</strong> – încarcă un aviz SmartBill și
+            extrage automat produsele și cantitățile.
           </li>
+
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Transfer automat</strong> – creează transferul de
+            inventar direct în Shopify.
           </li>
+
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Istoric complet</strong> – păstrează evidența avizelor
+            importate și a transferurilor create.
           </li>
         </ul>
       </div>
