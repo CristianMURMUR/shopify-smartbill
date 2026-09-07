@@ -1321,16 +1321,6 @@ export default function Index() {
           >
             <s-paragraph>
               <strong>
-                Delivery Note:
-              </strong>{" "}
-              {
-                previewData.aviz
-                  .number
-              }
-            </s-paragraph>
-
-            <s-paragraph>
-              <strong>
                 Date:
               </strong>{" "}
               {
