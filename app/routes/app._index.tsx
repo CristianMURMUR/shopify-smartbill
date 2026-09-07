@@ -155,7 +155,7 @@ function parseAviz(text: string): ParsedAviz {
     .trim();
 
   // ----------------------------------------------------------
-  // AVIZ NUMBER
+  // DELIVERY NOTE NUMBER
   // ----------------------------------------------------------
 
   const numberMatch = normalized.match(
@@ -164,7 +164,7 @@ function parseAviz(text: string): ParsedAviz {
 
   if (!numberMatch) {
     throw new Error(
-      "Nu am putut identifica numarul avizului.",
+      "Could not identify the delivery note number.",
     );
   }
 
@@ -178,7 +178,7 @@ function parseAviz(text: string): ParsedAviz {
 
   if (!dateMatch) {
     throw new Error(
-      "Nu am putut identifica data avizului.",
+      "Could not identify the delivery note date.",
     );
   }
 
@@ -187,7 +187,7 @@ function parseAviz(text: string): ParsedAviz {
   // ----------------------------------------------------------
   // FIRST ADDRESS = IGNORE
   //
-  // This is the Miraslau address.
+  // This is the supplier/Miraslau address.
   // It is intentionally NOT used for the transfer.
   // ----------------------------------------------------------
 
@@ -208,7 +208,7 @@ function parseAviz(text: string): ParsedAviz {
 
   if (!deliveryAddressMatch) {
     throw new Error(
-      "Nu am putut identifica adresa de livrare.",
+      "Could not identify the delivery address.",
     );
   }
 
@@ -219,7 +219,7 @@ function parseAviz(text: string): ParsedAviz {
   // ----------------------------------------------------------
   // LAST SIMPLE "Adresa:"
   //
-  // This is the Floreasca address.
+  // This is the warehouse/location address.
   // The first simple address (Miraslau) is ignored.
   // ----------------------------------------------------------
 
@@ -231,7 +231,7 @@ function parseAviz(text: string): ParsedAviz {
 
   if (plainAddressMatches.length === 0) {
     throw new Error(
-      "Nu am putut identifica adresa locatiei.",
+      "Could not identify the warehouse location address.",
     );
   }
 
@@ -275,7 +275,7 @@ function parseAviz(text: string): ParsedAviz {
 
     if (!quantityMatch) {
       throw new Error(
-        `Nu am putut identifica cantitatea pentru SKU ${sku}.`,
+        `Could not identify the quantity for SKU ${sku}.`,
       );
     }
 
@@ -288,7 +288,7 @@ function parseAviz(text: string): ParsedAviz {
       quantity <= 0
     ) {
       throw new Error(
-        `Cantitate invalida pentru SKU ${sku}.`,
+        `Invalid quantity for SKU ${sku}.`,
       );
     }
 
@@ -300,7 +300,7 @@ function parseAviz(text: string): ParsedAviz {
 
   if (items.length === 0) {
     throw new Error(
-      "Nu am identificat niciun SKU in PDF.",
+      "No SKUs were identified in the PDF.",
     );
   }
 
@@ -325,7 +325,7 @@ async function extractPdfText(file: File) {
   const buffer = Buffer.from(arrayBuffer);
 
   console.log(
-    `[SMARTBILL] PDF primit: ${file.name} (${buffer.length} bytes)`,
+    `[SMARTBILL] PDF received: ${file.name} (${buffer.length} bytes)`,
   );
 
   const { PDFParse } = await import("pdf-parse");
@@ -342,7 +342,7 @@ async function extractPdfText(file: File) {
     );
 
     console.log(
-      `[SMARTBILL] Text extras: ${result.text.length} caractere`,
+      `[SMARTBILL] Extracted text: ${result.text.length} characters`,
     );
 
     return result.text;
@@ -390,7 +390,7 @@ async function findSkuInShopify(
 
   if (json.errors) {
     throw new Error(
-      `Eroare la cautarea SKU ${sku}.`,
+      `Shopify SKU lookup failed for ${sku}.`,
     );
   }
 
@@ -405,13 +405,13 @@ async function findSkuInShopify(
 
   if (!variant) {
     throw new Error(
-      `SKU-ul ${sku} nu a fost gasit in Shopify.`,
+      `SKU ${sku} was not found in Shopify.`,
     );
   }
 
   if (!variant.inventoryItem?.id) {
     throw new Error(
-      `SKU-ul ${sku} nu are Inventory Item in Shopify.`,
+      `SKU ${sku} does not have an Inventory Item in Shopify.`,
     );
   }
 
@@ -450,14 +450,6 @@ export const action = async ({
 
     // ========================================================
     // CREATE TRANSFER
-    //
-    // IMPORTANT:
-    // We DO NOT read the PDF here.
-    // We DO NOT parse it again.
-    // We DO NOT query the SKUs again.
-    // We DO NOT query locations again.
-    //
-    // We use the already validated preview data.
     // ========================================================
 
     if (createTransfer) {
@@ -475,7 +467,7 @@ export const action = async ({
         return {
           ok: false,
           error:
-            "Datele preview-ului lipsesc. Proceseaza din nou PDF-ul.",
+            "Preview data is missing. Please process the PDF again.",
         };
       }
 
@@ -494,7 +486,7 @@ export const action = async ({
         return {
           ok: false,
           error:
-            "Datele transferului sunt invalide.",
+            "The transfer data is invalid.",
         };
       }
 
@@ -515,7 +507,7 @@ export const action = async ({
         return {
           ok: false,
           error:
-            "Date incomplete pentru crearea transferului.",
+            "Incomplete data for creating the transfer.",
         };
       }
 
@@ -523,7 +515,7 @@ export const action = async ({
         "=== SMARTBILL CREATE TRANSFER ===",
       );
 
-      console.log("Aviz:", aviz.number);
+      console.log("Delivery note:", aviz.number);
       console.log(
         "Origin:",
         originLocation.name,
@@ -539,9 +531,6 @@ export const action = async ({
 
       // ------------------------------------------------------
       // IDEMPOTENCY KEY
-      //
-      // Same aviz = same operation.
-      // This prevents duplicate creation on retry.
       // ------------------------------------------------------
 
       const idempotencyKey =
@@ -595,6 +584,9 @@ export const action = async ({
               destinationLocationId:
                 destinationLocation.id,
 
+              // Shopify's system-generated transfer name
+              // remains #Txxxx. The delivery note number
+              // is stored as the editable reference name.
               referenceName:
                 aviz.number,
 
@@ -603,7 +595,7 @@ export const action = async ({
                 : undefined,
 
               note:
-                `Import SmartBill ${aviz.number}`,
+                `SmartBill delivery note ${aviz.number}`,
 
               lineItems: items.map(
                 (item) => ({
@@ -632,7 +624,7 @@ export const action = async ({
         return {
           ok: false,
           error:
-            "Eroare Shopify la crearea transferului.",
+            "Shopify returned an error while creating the transfer.",
           details: json.errors,
         };
       }
@@ -644,7 +636,7 @@ export const action = async ({
         return {
           ok: false,
           error:
-            "Shopify nu a returnat rezultatul crearii transferului.",
+            "Shopify did not return a transfer creation result.",
           details: json,
         };
       }
@@ -653,7 +645,7 @@ export const action = async ({
         return {
           ok: false,
           error:
-            "Shopify a respins crearea transferului.",
+            "Shopify rejected the transfer creation.",
           details: result.userErrors,
         };
       }
@@ -662,7 +654,7 @@ export const action = async ({
         return {
           ok: false,
           error:
-            "Shopify nu a returnat transferul creat.",
+            "Shopify did not return the created transfer.",
           details: result,
         };
       }
@@ -671,7 +663,7 @@ export const action = async ({
         result.inventoryTransfer;
 
       console.log(
-        "Transfer creat:",
+        "Transfer created:",
         transfer.name,
       );
 
@@ -717,7 +709,7 @@ export const action = async ({
       return {
         ok: false,
         error:
-          "Nu ai selectat niciun PDF.",
+          "No PDF file was selected.",
       };
     }
 
@@ -725,7 +717,7 @@ export const action = async ({
       return {
         ok: false,
         error:
-          "PDF-ul este gol.",
+          "The PDF file is empty.",
       };
     }
 
@@ -739,7 +731,7 @@ export const action = async ({
       return {
         ok: false,
         error:
-          "Fisierul trebuie sa fie PDF.",
+          "The selected file must be a PDF.",
       };
     }
 
@@ -748,7 +740,7 @@ export const action = async ({
     );
 
     // --------------------------------------------------------
-    // 1. PDF
+    // 1. EXTRACT PDF TEXT
     // --------------------------------------------------------
 
     const avizText =
@@ -758,7 +750,7 @@ export const action = async ({
       return {
         ok: false,
         error:
-          "PDF-ul nu contine text care poate fi extras.",
+          "The PDF does not contain extractable text.",
       };
     }
 
@@ -776,41 +768,37 @@ export const action = async ({
         error:
           error instanceof Error
             ? error.message
-            : "Nu am putut interpreta avizul.",
+            : "Could not parse the delivery note.",
       };
     }
 
     console.log(
-      "Aviz identificat:",
+      "Delivery note identified:",
       aviz.number,
     );
 
     console.log(
-      "Adresa furnizorului IGNORATA:",
+      "Ignored supplier address:",
       aviz.ignoredSupplierAddress,
     );
 
     console.log(
-      "Adresa clientului:",
+      "Client address:",
       aviz.clientAddress,
     );
 
     console.log(
-      "Adresa locatiei:",
+      "Location address:",
       aviz.locationAddress,
     );
 
     console.log(
-      "SKU-uri:",
+      "SKUs:",
       aviz.items,
     );
 
     // --------------------------------------------------------
-    // 3. LOCATII
-    //
-    // NO SHOPIFY REQUEST HERE.
-    //
-    // We already know the configured addresses and IDs.
+    // 3. LOCATIONS
     // --------------------------------------------------------
 
     const originLocation =
@@ -830,7 +818,7 @@ export const action = async ({
       return {
         ok: false,
         error:
-          "Adresele avizului nu corespund locatiilor configurate.",
+          "The addresses in the delivery note do not match the configured Shopify locations.",
         details: {
           ignoredSupplierAddress:
             aviz.ignoredSupplierAddress,
@@ -857,12 +845,12 @@ export const action = async ({
       return {
         ok: false,
         error:
-          "Locatia de origine si locatia de destinatie sunt aceeasi.",
+          "The origin and destination locations are the same.",
       };
     }
 
     // --------------------------------------------------------
-    // 4. SKU LOOKUP - IN PARALEL
+    // 4. SKU LOOKUP - IN PARALLEL
     // --------------------------------------------------------
 
     const skuStarted =
@@ -893,7 +881,7 @@ export const action = async ({
       );
 
       console.log(
-        "Toate SKU-urile au fost gasite in Shopify.",
+        "All SKUs were found in Shopify.",
       );
 
       console.log(
@@ -927,12 +915,12 @@ export const action = async ({
         error:
           error instanceof Error
             ? error.message
-            : "Eroare la cautarea produselor in Shopify.",
+            : "An error occurred while looking up products in Shopify.",
       };
     }
   } catch (error) {
     console.error(
-      "EROARE IMPORT SMARTBILL:",
+      "SMARTBILL IMPORT ERROR:",
       error,
     );
 
@@ -941,7 +929,7 @@ export const action = async ({
       error:
         error instanceof Error
           ? error.message
-          : "A aparut o eroare la procesarea PDF-ului.",
+          : "An unexpected error occurred while processing the PDF.",
     };
   }
 };
@@ -982,7 +970,7 @@ export default function Index() {
       fetcher.data.mode === "transfer"
     ) {
       shopify.toast.show(
-        "Transferul Shopify a fost creat.",
+        `Transfer created for ${fetcher.data.transfer.referenceName ?? "delivery note"}.`,
       );
     }
 
@@ -1031,10 +1019,6 @@ export default function Index() {
 
   // ==========================================================
   // CREATE TRANSFER
-  //
-  // IMPORTANT:
-  // We send the preview data.
-  // We DO NOT send the PDF again.
   // ==========================================================
 
   const createTransfer = () => {
@@ -1059,7 +1043,7 @@ export default function Index() {
       !destinationLocation
     ) {
       shopify.toast.show(
-        "Locatiile transferului nu mai pot fi identificate.",
+        "The transfer locations could not be identified.",
       );
       return;
     }
@@ -1111,7 +1095,8 @@ export default function Index() {
           gap="base"
         >
           <s-paragraph>
-            Upload smartbill delivery note (PDF)
+            Upload a SmartBill delivery note in PDF format.
+            The PDF will be processed automatically.
           </s-paragraph>
 
           <input
@@ -1144,26 +1129,28 @@ export default function Index() {
                 direction="block"
                 gap="small"
               >
-                <s-text>
-                  Selected file:
-                </s-text>
+                <span>
+                  <strong>
+                    Selected file:
+                  </strong>
+                </span>
 
-                <s-text>
+                <span>
                   {file.name}
-                </s-text>
+                </span>
 
-                <s-text>
+                <span>
                   {(
                     file.size /
                     1024
                   ).toFixed(1)}{" "}
                   KB
-                </s-text>
+                </span>
 
                 {isLoading ? (
-                  <s-text>
-                    Se proceseaza PDF-ul...
-                  </s-text>
+                  <span>
+                    Processing PDF...
+                  </span>
                 ) : null}
               </s-stack>
             </s-box>
@@ -1177,7 +1164,7 @@ export default function Index() {
 
       {previewData ? (
         <s-section
-          heading={`Delivery note ${previewData.aviz.number}`}
+          heading={`Delivery Note ${previewData.aviz.number}`}
         >
           <s-stack
             direction="block"
@@ -1185,7 +1172,7 @@ export default function Index() {
           >
             <s-paragraph>
               <strong>
-                Delivery note:
+                Delivery Note:
               </strong>{" "}
               {
                 previewData.aviz
@@ -1195,12 +1182,12 @@ export default function Index() {
 
             <s-paragraph>
               <strong>
-                Data:
+                Date:
               </strong>{" "}
               {
                 previewData.aviz
                   .date ||
-                "nespecificata"
+                "Not specified"
               }
             </s-paragraph>
 
@@ -1222,7 +1209,7 @@ export default function Index() {
             <s-divider />
 
             <s-heading>
-              Products:
+              Products
             </s-heading>
 
             {previewData.items.map(
@@ -1237,32 +1224,38 @@ export default function Index() {
                     direction="block"
                     gap="small"
                   >
-                    <s-text>
+                    <span>
                       <strong>
                         {item.sku}
                       </strong>
-                    </s-text>
+                    </span>
 
-                    <s-text>
-                      Product:{" "}
+                    <span>
+                      <strong>
+                        Product:
+                      </strong>{" "}
                       {
                         item.productTitle
                       }
-                    </s-text>
+                    </span>
 
-                    <s-text>
-                      Varianta:{" "}
+                    <span>
+                      <strong>
+                        Variant:
+                      </strong>{" "}
                       {
                         item.variantTitle
                       }
-                    </s-text>
+                    </span>
 
-                    <s-text>
-                      Cantitate:{" "}
+                    <span>
+                      <strong>
+                        Quantity:
+                      </strong>{" "}
                       {
                         item.quantity
                       }
-                    </s-text>
+                    </span>
                   </s-stack>
                 </s-box>
               ),
@@ -1282,8 +1275,8 @@ export default function Index() {
               )}
             >
               {isLoading
-                ? "Se creeaza..."
-                : "Creeaza transferul"}
+                ? "Creating transfer..."
+                : "Create transfer"}
             </s-button>
           </s-stack>
         </s-section>
@@ -1296,7 +1289,7 @@ export default function Index() {
       {fetcher.data &&
       !fetcher.data.ok ? (
         <s-section
-          heading="Eroare"
+          heading="Error"
         >
           <s-box
             padding="base"
@@ -1322,7 +1315,7 @@ export default function Index() {
       fetcher.data.mode ===
         "transfer" ? (
         <s-section
-          heading="Transfer creat"
+          heading="Transfer Created"
         >
           <s-stack
             direction="block"
@@ -1332,12 +1325,40 @@ export default function Index() {
               {
                 fetcher.data
                   .transfer
+                  .referenceName ??
+                fetcher.data
+                  .transfer
                   .name
               }
             </s-heading>
 
             <s-paragraph>
-              Status:{" "}
+              <strong>
+                Shopify Transfer:
+              </strong>{" "}
+              {
+                fetcher.data
+                  .transfer
+                  .name
+              }
+            </s-paragraph>
+
+            <s-paragraph>
+              <strong>
+                Delivery Note:
+              </strong>{" "}
+              {
+                fetcher.data
+                  .transfer
+                  .referenceName ??
+                "Not specified"
+              }
+            </s-paragraph>
+
+            <s-paragraph>
+              <strong>
+                Status:
+              </strong>{" "}
               {
                 fetcher.data
                   .transfer
@@ -1346,16 +1367,9 @@ export default function Index() {
             </s-paragraph>
 
             <s-paragraph>
-              Reference:{" "}
-              {
-                fetcher.data
-                  .transfer
-                  .referenceName
-              }
-            </s-paragraph>
-
-            <s-paragraph>
-              Direction:{" "}
+              <strong>
+                Direction:
+              </strong>{" "}
               {
                 fetcher.data
                   .transfer
@@ -1372,7 +1386,7 @@ export default function Index() {
             <s-divider />
 
             <s-heading>
-              Transfered products
+              Transferred Products
             </s-heading>
 
             {fetcher.data.items.map(
@@ -1387,12 +1401,14 @@ export default function Index() {
                     direction="inline"
                     gap="base"
                   >
-                    <s-text>
-                      {item.sku}
-                    </s-text>
+                    <span>
+                      <strong>
+                        {item.sku}
+                      </strong>
+                    </span>
 
                     <span>
-                      Cantitate:{" "}
+                      Quantity:{" "}
                       {
                         item.quantity
                       }
