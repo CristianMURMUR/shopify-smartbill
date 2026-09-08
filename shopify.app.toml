@@ -17,8 +17,11 @@ api_version = "2026-10"
   uri = "/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
 
-[access_scopes]
-scopes = "read_locations,write_locations,read_products,write_products,read_inventory,write_inventory,write_inventory_transfers,read_inventory_transfers"
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/orders-create"
+  topics = [ "orders/create" ]
 
+[access_scopes]
+scopes = "read_locations,write_locations,read_products,write_products,read_inventory,write_inventory,write_inventory_transfers,read_inventory_transfers,read_orders"
 [auth]
 redirect_urls = [ "https://shopify-smartbill.onrender.com/auth/callback" ]

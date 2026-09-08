@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -14,9 +11,9 @@ model Session {
   id                  String    @id
   shop                String
   state               String
-  isOnline            Boolean   @default(false)
+  isOnline             Boolean   @default(false)
   scope               String?
-  expires              DateTime?
+  expires             DateTime?
   accessToken         String
   userId              BigInt?
   firstName           String?
@@ -40,4 +37,60 @@ model ImportHistory {
 
   @@unique([shop, avizNumber])
   @@index([createdAt])
+}
+
+enum ShopyBillStatus {
+  RECEIVED
+  PROCESSING
+  SUCCESS
+  FAILED
+}
+
+model ShopyBill {
+  id                  String            @id @default(cuid())
+  shop                String
+  shopifyOrderId      String
+  shopifyOrderName    String
+  shopifyLocationId   String?
+  shopifyLocationName String?
+  sourceName          String?
+  total               Float
+  currency            String
+  status              ShopyBillStatus @default(RECEIVED)
+  errorMessage        String?
+  retryCount          Int               @default(0)
+  smartbillSeries     String?
+  smartbillNumber     String?
+  smartbillUrl        String?
+  webhookId           String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  items ShopyBillItem[]
+
+  @@unique([shop, shopifyOrderId])
+  @@index([shop, status])
+  @@index([createdAt])
+}
+
+model ShopyBillItem {
+  id                    String   @id @default(cuid())
+  billId                String
+  sku                   String
+  productName           String
+  quantity              Int
+  shopifyUnitPrice      Float
+  currency              String
+  taxRate               Float?
+  taxName               String?
+  taxable               Boolean  @default(false)
+  smartbillProductName   String?
+  smartbillMeasuringUnit String?
+  smartbillStock         Float?
+  createdAt              DateTime @default(now())
+
+  bill ShopyBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+  @@index([sku])
 }
