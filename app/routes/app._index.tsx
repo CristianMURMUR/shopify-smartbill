@@ -1026,10 +1026,10 @@ if (result.userErrors?.length) {
             aviz.clientAddress,
 
           location1:
-            LOCATION_1_ADDRESS,
+            LOCATION_PROMENADA,
 
           location3:
-            LOCATION_3_ADDRESS,
+            LOCATION_SEDIU,
         },
       };
     }
