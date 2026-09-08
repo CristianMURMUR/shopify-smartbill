@@ -8,8 +8,8 @@ function getTransferAdminUrl(transferId: string) {
   const numericId = transferId.split("/").pop();
 
   return numericId
-    ? `https://admin.shopify.com/store/murmur-developer-test/transfers/${numericId}`
-    : "https://admin.shopify.com/store/murmur-developer-test/transfers";
+    ? `https://admin.shopify.com/store/murmur-ro/transfers/${numericId}`
+    : "https://admin.shopify.com/store/murmur-ro/transfers";
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
