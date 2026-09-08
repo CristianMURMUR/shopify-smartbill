@@ -19,14 +19,31 @@ import prisma from "../db.server";
 // ============================================================
 // SHOPIFY LOCATIONS
 // ============================================================
+//
+// IMPORTANT:
+// Locația este identificată DOAR după "Adresa de livrare"
+// din documentul SmartBill.
+//
+// Nu folosim:
+// - Adresa furnizorului
+// - Adresa clientului
+// - alte "Adresa:" din document
+//
+// Există doar 2 locații:
+//
+// 1. Magazin Promenada
+// 2. Sediu Principal
+//
+// După ce identificăm DESTINAȚIA din "Adresa de livrare",
+// ORIGINEA este automat cealaltă locație.
+// ============================================================
 
 const LOCATION_PROMENADA = {
   id: "gid://shopify/Location/88240128340",
   name: "Magazin Promenada",
 
-  // Folosim elemente stabile din adresă.
-  // Nu comparăm adresa completă.
-  addressKeywords: [
+  deliveryAddressKeywords: [
+    "sediul secundar promenada mall",
     "calea floreasca",
     "244-246",
   ],
@@ -36,7 +53,8 @@ const LOCATION_SEDIU = {
   id: "gid://shopify/Location/52695138464",
   name: "Sediu Principal",
 
-  addressKeywords: [
+  deliveryAddressKeywords: [
+    "murmur electromagnetica",
     "calea rahovei",
     "266-288",
   ],
@@ -74,9 +92,11 @@ type AvizItem = {
 type ParsedAviz = {
   number: string;
   date: string;
-  ignoredSupplierAddress: string;
-  clientAddress: string;
-  locationAddress: string;
+
+  // Adresa de livrare este SINGURA adresă folosită
+  // pentru identificarea locației.
+  deliveryAddress: string;
+
   items: AvizItem[];
 };
 
@@ -154,7 +174,23 @@ function normalizeAddress(value: string) {
     .toLowerCase();
 }
 
-function addressMatchesKeywords(
+// ============================================================
+// IDENTIFY LOCATION FROM DELIVERY ADDRESS
+// ============================================================
+//
+// IMPORTANT:
+//
+// Această funcție primește EXCLUSIV textul din:
+//
+// Adresa de livrare:
+//
+// Nu primește "Adresa:".
+// Nu primește adresa furnizorului.
+// Nu primește alte adrese din document.
+//
+// ============================================================
+
+function deliveryAddressMatches(
   address: string,
   keywords: string[],
 ) {
@@ -167,13 +203,17 @@ function addressMatchesKeywords(
   );
 }
 
-function getLocationByAddress(
-  address: string,
+function getDestinationLocation(
+  deliveryAddress: string,
 ): TransferLocation | null {
+  // ----------------------------------------------------------
+  // PROMENADA
+  // ----------------------------------------------------------
+
   if (
-    addressMatchesKeywords(
-      address,
-      LOCATION_PROMENADA.addressKeywords,
+    deliveryAddressMatches(
+      deliveryAddress,
+      LOCATION_PROMENADA.deliveryAddressKeywords,
     )
   ) {
     return {
@@ -182,10 +222,14 @@ function getLocationByAddress(
     };
   }
 
+  // ----------------------------------------------------------
+  // SEDIU PRINCIPAL
+  // ----------------------------------------------------------
+
   if (
-    addressMatchesKeywords(
-      address,
-      LOCATION_SEDIU.addressKeywords,
+    deliveryAddressMatches(
+      deliveryAddress,
+      LOCATION_SEDIU.deliveryAddressKeywords,
     )
   ) {
     return {
@@ -195,6 +239,38 @@ function getLocationByAddress(
   }
 
   return null;
+}
+
+// ============================================================
+// GET THE OTHER LOCATION
+// ============================================================
+//
+// Avem doar 2 locații.
+//
+// Dacă destinația este Promenada,
+// originea este Sediu Principal.
+//
+// Dacă destinația este Sediu Principal,
+// originea este Promenada.
+// ============================================================
+
+function getOriginLocation(
+  destinationLocation: TransferLocation,
+): TransferLocation {
+  if (
+    destinationLocation.id ===
+    LOCATION_PROMENADA.id
+  ) {
+    return {
+      id: LOCATION_SEDIU.id,
+      name: LOCATION_SEDIU.name,
+    };
+  }
+
+  return {
+    id: LOCATION_PROMENADA.id,
+    name: LOCATION_PROMENADA.name,
+  };
 }
 
 // ============================================================
@@ -236,98 +312,56 @@ function parseAviz(text: string): ParsedAviz {
     );
   }
 
-  const date = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+  const date =
+    `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
 
-// ----------------------------------------------------------
-// SUPPLIER ADDRESS = IGNORE
-// ----------------------------------------------------------
+  // ----------------------------------------------------------
+  // DELIVERY ADDRESS
+  // ----------------------------------------------------------
+  //
+  // FOARTE IMPORTANT:
+  //
+  // Identificarea locației se face DOAR pe baza acestui
+  // câmp.
+  //
+  // Exemplu Promenada:
+  //
+  // Adresa de livrare: SEDIUL SECUNDAR PROMENADA MALL,
+  // Calea Floreasca nr 244-246, Sector 2, Bucuresti
+  //
+  // Exemplu Sediu Principal:
+  //
+  // Adresa de livrare: MURMUR ELECTROMAGNETICA, Calea
+  // Rahovei 266-288, corp 3, etaj 2, Sector 5, Bucuresti
+  //
+  // Adresa poate ocupa mai multe linii.
+  // ----------------------------------------------------------
 
-const supplierAddressMatch = normalized.match(
-  /Adresa:\s*([^\n]+)/i,
-);
-
-const ignoredSupplierAddress =
-  supplierAddressMatch?.[1]?.trim() ?? "";
-
-
-// ----------------------------------------------------------
-// DELIVERY ADDRESS
-// ----------------------------------------------------------
-//
-// Important:
-// "Adresa de livrare:" este întotdeauna destinația.
-//
-// Exemplu:
-// Adresa de livrare:
-// SEDIUL SECUNDAR PROMENADA MALL,
-// Calea Floreasca nr 244-246, Sector 2, Bucuresti
-//
-// sau:
-//
-// Adresa de livrare:
-// MURMUR ELECTROMAGNETICA, Calea Rahovei
-// 266-288, corp 3, etaj 2, Sector 5, Bucuresti
-// ----------------------------------------------------------
-
-const deliveryAddressMatch = normalized.match(
-  /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt|$)/i,
-);
-
-if (!deliveryAddressMatch) {
-  throw new Error(
-    "Could not identify the delivery address.",
+  const deliveryAddressMatch = normalized.match(
+    /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt|$)/i,
   );
-}
 
-const clientAddress =
-  deliveryAddressMatch[1]
-    .replace(/\s+/g, " ")
-    .trim();
+  if (!deliveryAddressMatch) {
+    throw new Error(
+      "Could not identify the delivery address.",
+    );
+  }
 
+  const deliveryAddress =
+    deliveryAddressMatch[1]
+      .replace(/\s+/g, " ")
+      .trim();
 
-// ----------------------------------------------------------
-// CLIENT / ORIGIN ADDRESS
-// ----------------------------------------------------------
-//
-// Avem două formate posibile:
-//
-// FORMAT 1:
-//
-// Adresa: Calea Floreasca 244-246...
-// Adresa de livrare: SEDIUL SECUNDAR...
-//
-// FORMAT 2:
-//
-// Adresa: Str. Miraslau...
-// Adresa de livrare: Rahova...
-// ...
-// Adresa: Calea Floreasca 244-246...
-//
-// În ambele cazuri folosim ULTIMUL "Adresa:"
-// ca adresă de origine.
-// ----------------------------------------------------------
+  if (!deliveryAddress) {
+    throw new Error(
+      "The delivery address is empty.",
+    );
+  }
 
-const plainAddressMatches = [
-  ...normalized.matchAll(
-    /(?:^|\n)Adresa:\s*([^\n]+)/gi,
-  ),
-];
-
-if (plainAddressMatches.length === 0) {
-  throw new Error(
-    "Could not identify the warehouse location address.",
+  console.log(
+    "[SMARTBILL] Delivery address used for location identification:",
+    deliveryAddress,
   );
-}
-
-const lastAddressMatch =
-  plainAddressMatches[
-    plainAddressMatches.length - 1
-  ];
-
-const locationAddress =
-  lastAddressMatch[1]
-    .replace(/\s+/g, " ")
-    .trim();
 
   // ----------------------------------------------------------
   // SKU + QUANTITY
@@ -341,7 +375,11 @@ const locationAddress =
 
   const items: AvizItem[] = [];
 
-  for (let i = 0; i < skuMatches.length; i++) {
+  for (
+    let i = 0;
+    i < skuMatches.length;
+    i++
+  ) {
     const sku =
       skuMatches[i][1].toUpperCase();
 
@@ -354,10 +392,11 @@ const locationAddress =
           normalized.length
         : normalized.length;
 
-    const block = normalized.slice(
-      start,
-      end,
-    );
+    const block =
+      normalized.slice(
+        start,
+        end,
+      );
 
     const quantityMatch =
       block.match(
@@ -398,10 +437,11 @@ const locationAddress =
   return {
     number:
       numberMatch[1].toUpperCase(),
+
     date,
-    ignoredSupplierAddress,
-    clientAddress,
-    locationAddress,
+
+    deliveryAddress,
+
     items,
   };
 }
@@ -651,6 +691,11 @@ export const action = async ({
       );
 
       console.log(
+        "Delivery address:",
+        aviz.deliveryAddress,
+      );
+
+      console.log(
         "Origin:",
         originLocation.name,
       );
@@ -780,18 +825,24 @@ export const action = async ({
         };
       }
 
-if (result.userErrors?.length) {
-  console.error(
-    "SHOPIFY TRANSFER CREATION USER ERRORS:",
-    JSON.stringify(result.userErrors, null, 2)
-  );
+      if (result.userErrors?.length) {
+        console.error(
+          "SHOPIFY TRANSFER CREATION USER ERRORS:",
+          JSON.stringify(
+            result.userErrors,
+            null,
+            2,
+          ),
+        );
 
-  return {
-    ok: false,
-    error: "Shopify rejected the transfer creation.",
-    details: result.userErrors,
-  };
-}
+        return {
+          ok: false,
+          error:
+            "Shopify rejected the transfer creation.",
+          details:
+            result.userErrors,
+        };
+      }
 
       if (
         !result.inventoryTransfer
@@ -844,6 +895,7 @@ if (result.userErrors?.length) {
       return {
         ok: true,
         mode: "transfer",
+
         transfer: {
           id: transfer.id,
           name: transfer.name,
@@ -951,18 +1003,13 @@ if (result.userErrors?.length) {
     );
 
     console.log(
-      "Ignored supplier address:",
-      aviz.ignoredSupplierAddress,
+      "Delivery date:",
+      aviz.date,
     );
 
     console.log(
-      "Client address:",
-      aviz.clientAddress,
-    );
-
-    console.log(
-      "Location address:",
-      aviz.locationAddress,
+      "Delivery address:",
+      aviz.deliveryAddress,
     );
 
     console.log(
@@ -993,60 +1040,94 @@ if (result.userErrors?.length) {
     }
 
     // --------------------------------------------------------
-    // 4. LOCATIONS
+    // 4. IDENTIFY DESTINATION
+    // --------------------------------------------------------
+    //
+    // IMPORTANT:
+    //
+    // Folosim DOAR:
+    //
+    // aviz.deliveryAddress
+    //
+    // Nu folosim nicio altă adresă din PDF.
+    //
     // --------------------------------------------------------
 
-    const originLocation =
-      getLocationByAddress(
-        aviz.locationAddress,
-      );
-
     const destinationLocation =
-      getLocationByAddress(
-        aviz.clientAddress,
+      getDestinationLocation(
+        aviz.deliveryAddress,
       );
 
-    if (
-      !originLocation ||
-      !destinationLocation
-    ) {
+    if (!destinationLocation) {
       return {
         ok: false,
         error:
-          "The addresses in the delivery note do not match the configured Shopify locations.",
+          "The delivery address does not match any configured Shopify location.",
 
         details: {
-          ignoredSupplierAddress:
-            aviz.ignoredSupplierAddress,
+          deliveryAddress:
+            aviz.deliveryAddress,
 
-          locationAddress:
-            aviz.locationAddress,
+          configuredLocations: {
+            promenada: {
+              name:
+                LOCATION_PROMENADA.name,
+              deliveryAddressKeywords:
+                LOCATION_PROMENADA.deliveryAddressKeywords,
+            },
 
-          clientAddress:
-            aviz.clientAddress,
-
-          location1:
-            LOCATION_PROMENADA,
-
-          location3:
-            LOCATION_SEDIU,
+            sediu: {
+              name:
+                LOCATION_SEDIU.name,
+              deliveryAddressKeywords:
+                LOCATION_SEDIU.deliveryAddressKeywords,
+            },
+          },
         },
       };
     }
 
-    if (
-      originLocation.id ===
-      destinationLocation.id
-    ) {
-      return {
-        ok: false,
-        error:
-          "The origin and destination locations are the same.",
-      };
-    }
+    // --------------------------------------------------------
+    // 5. ORIGIN = THE OTHER LOCATION
+    // --------------------------------------------------------
+    //
+    // Avem doar două locații.
+    //
+    // Dacă destinația este Promenada:
+    //
+    // Sediu Principal → Magazin Promenada
+    //
+    // Dacă destinația este Sediu Principal:
+    //
+    // Magazin Promenada → Sediu Principal
+    // --------------------------------------------------------
+
+    const originLocation =
+      getOriginLocation(
+        destinationLocation,
+      );
+
+    console.log(
+      "=== TRANSFER DIRECTION ===",
+    );
+
+    console.log(
+      "Delivery address:",
+      aviz.deliveryAddress,
+    );
+
+    console.log(
+      "Origin:",
+      originLocation.name,
+    );
+
+    console.log(
+      "Destination:",
+      destinationLocation.name,
+    );
 
     // --------------------------------------------------------
-    // 5. SKU LOOKUP - IN PARALLEL
+    // 6. SKU LOOKUP - IN PARALLEL
     // --------------------------------------------------------
 
     const skuStarted =
@@ -1086,12 +1167,13 @@ if (result.userErrors?.length) {
       );
 
       // ------------------------------------------------------
-      // 6. PREVIEW
+      // 7. PREVIEW
       // ------------------------------------------------------
 
       return {
         ok: true,
         mode: "preview",
+
         aviz,
 
         direction: {
@@ -1231,28 +1313,26 @@ export default function Index() {
       return;
     }
 
-    const originLocation =
-      getLocationByAddress(
-        previewData.aviz
-          .locationAddress,
-      );
-
+    // Reidentificăm destinația DOAR din deliveryAddress.
     const destinationLocation =
-      getLocationByAddress(
+      getDestinationLocation(
         previewData.aviz
-          .clientAddress,
+          .deliveryAddress,
       );
 
-    if (
-      !originLocation ||
-      !destinationLocation
-    ) {
+    if (!destinationLocation) {
       shopify.toast.show(
-        "The transfer locations could not be identified.",
+        "The delivery address could not be matched to a Shopify location.",
       );
 
       return;
     }
+
+    // Originea este automat cealaltă locație.
+    const originLocation =
+      getOriginLocation(
+        destinationLocation,
+      );
 
     const formData =
       new FormData();
@@ -1388,6 +1468,16 @@ export default function Index() {
                 previewData.aviz
                   .date ||
                 "Not specified"
+              }
+            </s-paragraph>
+
+            <s-paragraph>
+              <strong>
+                Delivery address:
+              </strong>{" "}
+              {
+                previewData.aviz
+                  .deliveryAddress
               }
             </s-paragraph>
 
