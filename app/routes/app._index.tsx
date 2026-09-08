@@ -18,26 +18,17 @@ import prisma from "../db.server";
 // ============================================================
 //
 // IMPORTANT:
+// Location is identified ONLY from:
 //
-// Locația este identificată DOAR după:
+// "Adresa de livrare:"
 //
-// Adresa de livrare:
-//
-// Căutăm CASE-SENSITIVE:
+// CASE-SENSITIVE matching:
 //
 // "Calea Floreasca" -> Magazin Promenada
 // "Calea Rahovei"   -> Sediu Principal
 //
-// Nu folosim:
+// These IDs are intentionally hardcoded and are NOT changed.
 //
-// - Adresa furnizorului
-// - Adresa clientului
-// - alte "Adresa:" din document
-//
-// Există doar 2 locații.
-//
-// După identificarea DESTINAȚIEI,
-// ORIGINEA este automat cealaltă locație.
 // ============================================================
 
 const LOCATION_PROMENADA = {
@@ -137,34 +128,53 @@ type ActionResult =
     };
 
 // ============================================================
+// DEBUG HELPER
+// ============================================================
+
+function debugError(
+  label: string,
+  error: unknown,
+) {
+  console.error(`\n========== ${label} ==========`);
+
+  if (error instanceof Error) {
+    console.error("Error message:", error.message);
+    console.error("Error name:", error.name);
+
+    if (error.stack) {
+      console.error("Error stack:");
+      console.error(error.stack);
+    }
+  } else {
+    console.error("Unknown error:", error);
+  }
+
+  console.error(`========== END ${label} ==========\n`);
+}
+
+// ============================================================
 // LOADER
 // ============================================================
 
 export const loader = async ({
   request,
 }: LoaderFunctionArgs) => {
+  console.log("[SMARTBILL] LOADER START");
+
   await authenticate.admin(request);
+
+  console.log("[SMARTBILL] LOADER AUTH OK");
 
   return {};
 };
 
 // ============================================================
-// ADDRESS HELPERS
+// ADDRESS NORMALIZATION
 // ============================================================
 //
 // IMPORTANT:
-//
-// NU facem lowercase aici.
-//
-// Matching-ul este CASE-SENSITIVE.
-//
-// Exemplu:
-//
-// "Calea Floreasca" -> MATCH
-// "Calea Rahovei"   -> MATCH
-//
-// "calea floreasca" -> NU MATCH
-// "CALEA FLOREASCA" -> NU MATCH
+// NO lowercase.
+// Matching remains CASE-SENSITIVE.
 //
 // ============================================================
 
@@ -180,15 +190,11 @@ function normalizeDeliveryAddress(
 }
 
 // ============================================================
-// IDENTIFY LOCATION FROM DELIVERY ADDRESS
+// IDENTIFY DESTINATION
 // ============================================================
 //
-// Se caută DOAR keyword-ul principal:
+// ONLY deliveryAddress is used.
 //
-// Calea Floreasca
-// Calea Rahovei
-//
-// Matching CASE-SENSITIVE.
 // ============================================================
 
 function getDestinationLocation(
@@ -199,45 +205,77 @@ function getDestinationLocation(
       deliveryAddress,
     );
 
-  // ----------------------------------------------------------
-  // PROMENADA
-  // ----------------------------------------------------------
+  console.log(
+    "[LOCATION DEBUG] Original delivery address:",
+    deliveryAddress,
+  );
 
-  if (
+  console.log(
+    "[LOCATION DEBUG] Normalized delivery address:",
+    normalizedAddress,
+  );
+
+  console.log(
+    "[LOCATION DEBUG] Promenada keyword:",
+    LOCATION_PROMENADA.deliveryAddressKeyword,
+  );
+
+  console.log(
+    "[LOCATION DEBUG] Sediu keyword:",
+    LOCATION_SEDIU.deliveryAddressKeyword,
+  );
+
+  const promenadaMatch =
     normalizedAddress.includes(
       LOCATION_PROMENADA.deliveryAddressKeyword,
-    )
-  ) {
+    );
+
+  const sediuMatch =
+    normalizedAddress.includes(
+      LOCATION_SEDIU.deliveryAddressKeyword,
+    );
+
+  console.log(
+    "[LOCATION DEBUG] Calea Floreasca match:",
+    promenadaMatch,
+  );
+
+  console.log(
+    "[LOCATION DEBUG] Calea Rahovei match:",
+    sediuMatch,
+  );
+
+  if (promenadaMatch) {
+    console.log(
+      "[LOCATION DEBUG] DESTINATION = Magazin Promenada",
+    );
+
     return {
       id: LOCATION_PROMENADA.id,
       name: LOCATION_PROMENADA.name,
     };
   }
 
-  // ----------------------------------------------------------
-  // SEDIU PRINCIPAL
-  // ----------------------------------------------------------
+  if (sediuMatch) {
+    console.log(
+      "[LOCATION DEBUG] DESTINATION = Sediu Principal",
+    );
 
-  if (
-    normalizedAddress.includes(
-      LOCATION_SEDIU.deliveryAddressKeyword,
-    )
-  ) {
     return {
       id: LOCATION_SEDIU.id,
       name: LOCATION_SEDIU.name,
     };
   }
 
-  // ----------------------------------------------------------
-  // UNKNOWN
-  // ----------------------------------------------------------
+  console.log(
+    "[LOCATION DEBUG] NO LOCATION MATCH",
+  );
 
   return null;
 }
 
 // ============================================================
-// GET THE OTHER LOCATION
+// GET OTHER LOCATION
 // ============================================================
 
 function getOriginLocation(
@@ -266,18 +304,49 @@ function getOriginLocation(
 function parseAviz(
   text: string,
 ): ParsedAviz {
+  console.log(
+    "\n========== PARSE AVIZ START ==========",
+  );
+
+  console.log(
+    "[PARSE DEBUG] Input text length:",
+    text.length,
+  );
+
+  console.log(
+    "[PARSE DEBUG] First 3000 characters:",
+  );
+
+  console.log(
+    text.slice(0, 3000),
+  );
+
   const normalized = text
     .replace(/\r/g, "")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{2,}/g, "\n")
     .trim();
 
+  console.log(
+    "[PARSE DEBUG] Normalized text length:",
+    normalized.length,
+  );
+
   // ----------------------------------------------------------
   // DELIVERY NOTE NUMBER
   // ----------------------------------------------------------
 
+  console.log(
+    "[PARSE DEBUG] Looking for delivery note number...",
+  );
+
   const numberMatch = normalized.match(
     /\b(AVIZ[A-Z0-9-]+)\b/i,
+  );
+
+  console.log(
+    "[PARSE DEBUG] Number match:",
+    numberMatch?.[0] ?? null,
   );
 
   if (!numberMatch) {
@@ -290,8 +359,17 @@ function parseAviz(
   // DATE
   // ----------------------------------------------------------
 
+  console.log(
+    "[PARSE DEBUG] Looking for date...",
+  );
+
   const dateMatch = normalized.match(
     /Data\s+emiterii\s*:\s*(\d{2})\/(\d{2})\/(\d{4})/i,
+  );
+
+  console.log(
+    "[PARSE DEBUG] Date match:",
+    dateMatch?.[0] ?? null,
   );
 
   if (!dateMatch) {
@@ -303,25 +381,45 @@ function parseAviz(
   const date =
     `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
 
+  console.log(
+    "[PARSE DEBUG] Parsed date:",
+    date,
+  );
+
   // ----------------------------------------------------------
   // DELIVERY ADDRESS
   // ----------------------------------------------------------
   //
-  // FOARTE IMPORTANT:
+  // VERY IMPORTANT:
   //
-  // Luăm EXCLUSIV textul de după:
+  // We extract ONLY the value after:
   //
   // "Adresa de livrare:"
   //
-  // până la următorul câmp cunoscut.
+  // We do NOT use normal "Adresa:".
   //
-  // NU folosim niciun alt "Adresa:".
   // ----------------------------------------------------------
+
+  console.log(
+    "[PARSE DEBUG] Looking for 'Adresa de livrare:'...",
+  );
 
   const deliveryAddressMatch =
     normalized.match(
       /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt|$)/i,
     );
+
+  console.log(
+    "[PARSE DEBUG] Delivery address regex matched:",
+    Boolean(deliveryAddressMatch),
+  );
+
+  if (deliveryAddressMatch) {
+    console.log(
+      "[PARSE DEBUG] Raw delivery address captured:",
+      deliveryAddressMatch[1],
+    );
+  }
 
   if (!deliveryAddressMatch) {
     throw new Error(
@@ -334,26 +432,42 @@ function parseAviz(
       .replace(/\s+/g, " ")
       .trim();
 
+  console.log(
+    "[PARSE DEBUG] Final delivery address:",
+    deliveryAddress,
+  );
+
   if (!deliveryAddress) {
     throw new Error(
       "The delivery address is empty.",
     );
   }
 
-  console.log(
-    "[SMARTBILL] Delivery address used for location identification:",
-    deliveryAddress,
-  );
-
   // ----------------------------------------------------------
   // SKU + QUANTITY
   // ----------------------------------------------------------
+
+  console.log(
+    "[PARSE DEBUG] Looking for SKU codes...",
+  );
 
   const skuMatches = [
     ...normalized.matchAll(
       /\(([A-Z0-9][A-Z0-9-]{5,})\)/gi,
     ),
   ];
+
+  console.log(
+    "[PARSE DEBUG] SKU matches found:",
+    skuMatches.length,
+  );
+
+  console.log(
+    "[PARSE DEBUG] SKU values:",
+    skuMatches.map(
+      (match) => match[1],
+    ),
+  );
 
   const items: AvizItem[] = [];
 
@@ -380,10 +494,24 @@ function parseAviz(
         end,
       );
 
+    console.log(
+      `\n[PARSE DEBUG] Processing SKU ${sku}`,
+    );
+
+    console.log(
+      "[PARSE DEBUG] SKU block:",
+      block.slice(0, 1000),
+    );
+
     const quantityMatch =
       block.match(
         /\bbuc\s+(\d+(?:[.,]\d+)?)\b/i,
       );
+
+    console.log(
+      "[PARSE DEBUG] Quantity match:",
+      quantityMatch?.[0] ?? null,
+    );
 
     if (!quantityMatch) {
       throw new Error(
@@ -391,11 +519,17 @@ function parseAviz(
       );
     }
 
-    const quantity = Number(
-      quantityMatch[1].replace(
-        ",",
-        ".",
-      ),
+    const quantity =
+      Number(
+        quantityMatch[1].replace(
+          ",",
+          ".",
+        ),
+      );
+
+    console.log(
+      "[PARSE DEBUG] Parsed quantity:",
+      quantity,
     );
 
     if (
@@ -419,13 +553,31 @@ function parseAviz(
     );
   }
 
-  return {
+  const parsed: ParsedAviz = {
     number:
       numberMatch[1].toUpperCase(),
     date,
     deliveryAddress,
     items,
   };
+
+  console.log(
+    "\n[PARSE DEBUG] FINAL PARSED AVIZ:",
+  );
+
+  console.log(
+    JSON.stringify(
+      parsed,
+      null,
+      2,
+    ),
+  );
+
+  console.log(
+    "========== PARSE AVIZ END ==========\n",
+  );
+
+  return parsed;
 }
 
 // ============================================================
@@ -438,38 +590,198 @@ async function extractPdfText(
   const started =
     performance.now();
 
+  console.log(
+    "\n========== PDF EXTRACTION START ==========",
+  );
+
+  console.log(
+    "[PDF DEBUG] File name:",
+    file.name,
+  );
+
+  console.log(
+    "[PDF DEBUG] File type:",
+    file.type,
+  );
+
+  console.log(
+    "[PDF DEBUG] File size:",
+    file.size,
+  );
+
+  console.log(
+    "[PDF DEBUG] Converting file to ArrayBuffer...",
+  );
+
   const arrayBuffer =
     await file.arrayBuffer();
+
+  console.log(
+    "[PDF DEBUG] ArrayBuffer created:",
+    arrayBuffer.byteLength,
+    "bytes",
+  );
 
   const buffer =
     Buffer.from(arrayBuffer);
 
   console.log(
-    `[SMARTBILL] PDF received: ${file.name} (${buffer.length} bytes)`,
+    "[PDF DEBUG] Buffer created:",
+    buffer.length,
+    "bytes",
   );
 
-  const { PDFParse } =
-    await import("pdf-parse");
+  console.log(
+    "[PDF DEBUG] First bytes:",
+    buffer
+      .subarray(0, 20)
+      .toString("hex"),
+  );
 
-  const parser = new PDFParse({
-    data: buffer,
-  });
+  console.log(
+    "[PDF DEBUG] Importing pdf-parse...",
+  );
+
+  let PDFParse: any;
 
   try {
+    const pdfParseModule =
+      await import("pdf-parse");
+
+    console.log(
+      "[PDF DEBUG] pdf-parse module imported successfully.",
+    );
+
+    console.log(
+      "[PDF DEBUG] pdf-parse module keys:",
+      Object.keys(
+        pdfParseModule,
+      ),
+    );
+
+    PDFParse =
+      pdfParseModule.PDFParse;
+
+    if (!PDFParse) {
+      throw new Error(
+        "PDFParse was not found in pdf-parse module.",
+      );
+    }
+  } catch (error) {
+    debugError(
+      "PDF-PARSE IMPORT ERROR",
+      error,
+    );
+
+    throw new Error(
+      `Could not load PDF parser: ${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`,
+    );
+  }
+
+  console.log(
+    "[PDF DEBUG] Creating PDFParse instance...",
+  );
+
+  let parser: any;
+
+  try {
+    parser = new PDFParse({
+      data: buffer,
+    });
+
+    console.log(
+      "[PDF DEBUG] PDFParse instance created.",
+    );
+  } catch (error) {
+    debugError(
+      "PDF-PARSE CONSTRUCTOR ERROR",
+      error,
+    );
+
+    throw new Error(
+      `Could not initialize PDF parser: ${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`,
+    );
+  }
+
+  try {
+    console.log(
+      "[PDF DEBUG] Calling parser.getText()...",
+    );
+
     const result =
       await parser.getText();
 
     console.log(
-      `[SMARTBILL] PDF parse: ${(performance.now() - started).toFixed(0)} ms`,
+      "[PDF DEBUG] parser.getText() completed.",
     );
 
     console.log(
-      `[SMARTBILL] Extracted text: ${result.text.length} characters`,
+      "[PDF DEBUG] Extraction time:",
+      `${(
+        performance.now() -
+        started
+      ).toFixed(0)} ms`,
+    );
+
+    console.log(
+      "[PDF DEBUG] Extracted text length:",
+      result.text.length,
+    );
+
+    console.log(
+      "[PDF DEBUG] Extracted text preview:",
+    );
+
+    console.log(
+      result.text.slice(
+        0,
+        3000,
+      ),
+    );
+
+    console.log(
+      "========== PDF EXTRACTION END ==========\n",
     );
 
     return result.text;
+  } catch (error) {
+    debugError(
+      "PDF getText() ERROR",
+      error,
+    );
+
+    throw new Error(
+      `Could not extract text from PDF: ${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`,
+    );
   } finally {
-    await parser.destroy();
+    console.log(
+      "[PDF DEBUG] Destroying PDF parser...",
+    );
+
+    try {
+      await parser.destroy();
+
+      console.log(
+        "[PDF DEBUG] PDF parser destroyed.",
+      );
+    } catch (error) {
+      debugError(
+        "PDF parser destroy error",
+        error,
+      );
+    }
   }
 }
 
@@ -481,46 +793,123 @@ async function findSkuInShopify(
   admin: any,
   sku: string,
 ): Promise<TransferItem> {
-  const response =
-    await admin.graphql(
-      `#graphql
-        query FindVariantBySku($query: String!) {
-          productVariants(
-            first: 10
-            query: $query
-          ) {
-            nodes {
-              sku
+  console.log(
+    `\n[SHOPIFY SKU DEBUG] START SKU LOOKUP: ${sku}`,
+  );
+
+  const query =
+    `#graphql
+      query FindVariantBySku($query: String!) {
+        productVariants(
+          first: 10
+          query: $query
+        ) {
+          nodes {
+            sku
+            title
+            product {
               title
-              product {
-                title
-              }
-              inventoryItem {
-                id
-              }
+            }
+            inventoryItem {
+              id
             }
           }
         }
-      `,
-      {
-        variables: {
-          query: `sku:${sku}`,
+      }
+    `;
+
+  console.log(
+    "[SHOPIFY SKU DEBUG] Query:",
+    `sku:${sku}`,
+  );
+
+  let response: any;
+
+  try {
+    response =
+      await admin.graphql(
+        query,
+        {
+          variables: {
+            query: `sku:${sku}`,
+          },
         },
-      },
+      );
+
+    console.log(
+      "[SHOPIFY SKU DEBUG] GraphQL request completed.",
+    );
+  } catch (error) {
+    debugError(
+      `SHOPIFY SKU GRAPHQL REQUEST ERROR ${sku}`,
+      error,
     );
 
-  const json =
-    (await response.json()) as any;
+    throw new Error(
+      `Shopify SKU lookup failed for ${sku}: ${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`,
+    );
+  }
+
+  console.log(
+    "[SHOPIFY SKU DEBUG] HTTP status:",
+    response.status,
+  );
+
+  let json: any;
+
+  try {
+    json =
+      await response.json();
+
+    console.log(
+      "[SHOPIFY SKU DEBUG] JSON received:",
+    );
+
+    console.log(
+      JSON.stringify(
+        json,
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    debugError(
+      `SHOPIFY SKU JSON ERROR ${sku}`,
+      error,
+    );
+
+    throw new Error(
+      `Shopify returned invalid JSON for SKU ${sku}.`,
+    );
+  }
 
   if (json.errors) {
+    console.error(
+      `[SHOPIFY SKU DEBUG] GRAPHQL ERRORS FOR ${sku}:`,
+      JSON.stringify(
+        json.errors,
+        null,
+        2,
+      ),
+    );
+
     throw new Error(
       `Shopify SKU lookup failed for ${sku}.`,
     );
   }
 
   const nodes =
-    json.data?.productVariants?.nodes ??
-    [];
+    json.data
+      ?.productVariants
+      ?.nodes ?? [];
+
+  console.log(
+    `[SHOPIFY SKU DEBUG] Found ${nodes.length} candidate variants for ${sku}.`,
+  );
 
   const variant =
     nodes.find(
@@ -530,10 +919,42 @@ async function findSkuInShopify(
     );
 
   if (!variant) {
+    console.error(
+      `[SHOPIFY SKU DEBUG] EXACT SKU NOT FOUND: ${sku}`,
+    );
+
+    console.error(
+      "[SHOPIFY SKU DEBUG] Candidates:",
+      JSON.stringify(
+        nodes,
+        null,
+        2,
+      ),
+    );
+
     throw new Error(
       `SKU ${sku} was not found in Shopify.`,
     );
   }
+
+  console.log(
+    `[SHOPIFY SKU DEBUG] Exact SKU found: ${sku}`,
+  );
+
+  console.log(
+    "[SHOPIFY SKU DEBUG] Product:",
+    variant.product?.title,
+  );
+
+  console.log(
+    "[SHOPIFY SKU DEBUG] Variant:",
+    variant.title,
+  );
+
+  console.log(
+    "[SHOPIFY SKU DEBUG] Inventory Item ID:",
+    variant.inventoryItem?.id,
+  );
 
   if (
     !variant.inventoryItem?.id
@@ -562,22 +983,65 @@ async function findSkuInShopify(
 export const action = async ({
   request,
 }: ActionFunctionArgs): Promise<ActionResult> => {
+  console.log(
+    "\n\n============================================================",
+  );
+
+  console.log(
+    "[SMARTBILL] ACTION START",
+    new Date().toISOString(),
+  );
+
+  console.log(
+    "[SMARTBILL] Request method:",
+    request.method,
+  );
+
+  console.log(
+    "[SMARTBILL] Request URL:",
+    request.url,
+  );
+
+  console.log(
+    "============================================================",
+  );
+
   const { admin, session } =
     await authenticate.admin(request);
 
-  try {
-    console.log(
-      "[SMARTBILL] REQUEST START",
-      new Date().toISOString(),
-    );
+  console.log(
+    "[SMARTBILL] Shopify authentication successful.",
+  );
 
+  console.log(
+    "[SMARTBILL] Shop:",
+    session.shop,
+  );
+
+  try {
     const formData =
       await request.formData();
+
+    console.log(
+      "[SMARTBILL] FormData received.",
+    );
+
+    console.log(
+      "[SMARTBILL] FormData keys:",
+      Array.from(
+        formData.keys(),
+      ),
+    );
 
     const createTransfer =
       formData.get(
         "createTransfer",
       ) === "true";
+
+    console.log(
+      "[SMARTBILL] createTransfer:",
+      createTransfer,
+    );
 
     // ========================================================
     // CREATE TRANSFER
@@ -585,14 +1049,19 @@ export const action = async ({
 
     if (createTransfer) {
       console.log(
-        "[SMARTBILL] CREATE TRANSFER START",
-        new Date().toISOString(),
+        "\n========== CREATE TRANSFER START ==========",
       );
 
       const transferDataRaw =
         formData.get(
           "transferData",
         );
+
+      console.log(
+        "[TRANSFER DEBUG] transferData exists:",
+        typeof transferDataRaw ===
+          "string",
+      );
 
       if (
         typeof transferDataRaw !==
@@ -604,6 +1073,16 @@ export const action = async ({
             "Preview data is missing. Please process the PDF again.",
         };
       }
+
+      console.log(
+        "[TRANSFER DEBUG] transferData length:",
+        transferDataRaw.length,
+      );
+
+      console.log(
+        "[TRANSFER DEBUG] Raw transferData:",
+        transferDataRaw,
+      );
 
       let transferData: {
         aviz: ParsedAviz;
@@ -617,7 +1096,12 @@ export const action = async ({
           JSON.parse(
             transferDataRaw,
           );
-      } catch {
+      } catch (error) {
+        debugError(
+          "TRANSFER DATA JSON PARSE ERROR",
+          error,
+        );
+
         return {
           ok: false,
           error:
@@ -632,6 +1116,18 @@ export const action = async ({
         destinationLocation,
       } = transferData;
 
+      console.log(
+        "[TRANSFER DEBUG] Parsed transfer data:",
+      );
+
+      console.log(
+        JSON.stringify(
+          transferData,
+          null,
+          2,
+        ),
+      );
+
       if (
         !aviz?.number ||
         !originLocation?.id ||
@@ -639,16 +1135,25 @@ export const action = async ({
         !Array.isArray(items) ||
         items.length === 0
       ) {
+        console.error(
+          "[TRANSFER DEBUG] INCOMPLETE TRANSFER DATA",
+        );
+
         return {
           ok: false,
           error:
             "Incomplete data for creating the transfer.",
+          details: transferData,
         };
       }
 
       // ------------------------------------------------------
       // DUPLICATE CHECK
       // ------------------------------------------------------
+
+      console.log(
+        "[TRANSFER DEBUG] Checking duplicate import...",
+      );
 
       const existingImport =
         await prisma.importHistory.findUnique({
@@ -661,6 +1166,17 @@ export const action = async ({
           },
         });
 
+      console.log(
+        "[TRANSFER DEBUG] Existing import:",
+        existingImport
+          ? JSON.stringify(
+              existingImport,
+              null,
+              2,
+            )
+          : "NONE",
+      );
+
       if (existingImport) {
         return {
           ok: false,
@@ -669,13 +1185,22 @@ export const action = async ({
         };
       }
 
+      // ------------------------------------------------------
+      // TRANSFER DATA DEBUG
+      // ------------------------------------------------------
+
       console.log(
-        "=== SMARTBILL CREATE TRANSFER ===",
+        "\n========== TRANSFER DATA ==========",
       );
 
       console.log(
         "Delivery note:",
         aviz.number,
+      );
+
+      console.log(
+        "Delivery date:",
+        aviz.date,
       );
 
       console.log(
@@ -689,13 +1214,36 @@ export const action = async ({
       );
 
       console.log(
+        "Origin ID:",
+        originLocation.id,
+      );
+
+      console.log(
         "Destination:",
         destinationLocation.name,
       );
 
       console.log(
+        "Destination ID:",
+        destinationLocation.id,
+      );
+
+      console.log(
         "Products:",
         items.length,
+      );
+
+      console.log(
+        "Products detail:",
+        JSON.stringify(
+          items,
+          null,
+          2,
+        ),
+      );
+
+      console.log(
+        "==================================\n",
       );
 
       // ------------------------------------------------------
@@ -705,35 +1253,107 @@ export const action = async ({
       const idempotencyKey =
         `smartbill-${session.shop}-${aviz.number}`;
 
-      const mutation = `#graphql
-        mutation CreateInventoryTransfer(
-          $input: InventoryTransferCreateInput!
-          $idempotencyKey: String!
-        ) {
-          inventoryTransferCreate(
-            input: $input
-          ) @idempotent(
-            key: $idempotencyKey
+      console.log(
+        "[TRANSFER DEBUG] Idempotency key:",
+        idempotencyKey,
+      );
+
+      const mutation =
+        `#graphql
+          mutation CreateInventoryTransfer(
+            $input: InventoryTransferCreateInput!
+            $idempotencyKey: String!
           ) {
-            inventoryTransfer {
-              id
-              name
-              status
-              referenceName
-              origin {
+            inventoryTransferCreate(
+              input: $input
+            ) @idempotent(
+              key: $idempotencyKey
+            ) {
+              inventoryTransfer {
+                id
                 name
+                status
+                referenceName
+                origin {
+                  name
+                }
+                destination {
+                  name
+                }
               }
-              destination {
-                name
+              userErrors {
+                field
+                message
               }
-            }
-            userErrors {
-              field
-              message
             }
           }
-        }
-      `;
+        `;
+
+      const input = {
+        originLocationId:
+          originLocation.id,
+        destinationLocationId:
+          destinationLocation.id,
+        referenceName:
+          aviz.number,
+        dateCreated:
+          aviz.date
+            ? `${aviz.date}T00:00:00Z`
+            : undefined,
+        note:
+          `SmartBill delivery note ${aviz.number}`,
+        lineItems:
+          items.map(
+            (item) => ({
+              inventoryItemId:
+                item.inventoryItemId,
+              quantity:
+                item.quantity,
+            }),
+          ),
+      };
+
+      console.log(
+        "\n========== SHOPIFY TRANSFER REQUEST ==========",
+      );
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] Origin location ID:",
+        input.originLocationId,
+      );
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] Destination location ID:",
+        input.destinationLocationId,
+      );
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] Reference:",
+        input.referenceName,
+      );
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] Date:",
+        input.dateCreated,
+      );
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] Note:",
+        input.note,
+      );
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] Line items:",
+        JSON.stringify(
+          input.lineItems,
+          null,
+          2,
+        ),
+      );
+
+      console.log(
+        "==============================================\n",
+      );
 
       console.log(
         "[SMARTBILL] BEFORE SHOPIFY CREATE",
@@ -743,58 +1363,122 @@ export const action = async ({
       const started =
         performance.now();
 
-      const response =
-        await admin.graphql(
-          mutation,
-          {
-            variables: {
-              input: {
-                originLocationId:
-                  originLocation.id,
+      let response: any;
 
-                destinationLocationId:
-                  destinationLocation.id,
-
-                referenceName:
-                  aviz.number,
-
-                dateCreated:
-                  aviz.date
-                    ? `${aviz.date}T00:00:00Z`
-                    : undefined,
-
-                note:
-                  `SmartBill delivery note ${aviz.number}`,
-
-                lineItems:
-                  items.map(
-                    (item) => ({
-                      inventoryItemId:
-                        item.inventoryItemId,
-
-                      quantity:
-                        item.quantity,
-                    }),
-                  ),
+      try {
+        response =
+          await admin.graphql(
+            mutation,
+            {
+              variables: {
+                input,
+                idempotencyKey,
               },
-
-              idempotencyKey,
             },
-          },
+          );
+
+        console.log(
+          "[SHOPIFY TRANSFER DEBUG] GraphQL request completed.",
+        );
+      } catch (error) {
+        debugError(
+          "SHOPIFY TRANSFER GRAPHQL REQUEST ERROR",
+          error,
         );
 
-      const json =
-        (await response.json()) as any;
-
-      console.log(
-        `[SMARTBILL] inventoryTransferCreate: ${(performance.now() - started).toFixed(0)} ms`,
-      );
-
-      if (json.errors) {
         return {
           ok: false,
           error:
-            "Shopify returned an error while creating the transfer.",
+            "Shopify GraphQL request failed while creating the transfer.",
+          details:
+            error instanceof Error
+              ? {
+                  message:
+                    error.message,
+                  stack:
+                    error.stack,
+                }
+              : error,
+        };
+      }
+
+      console.log(
+        `[SMARTBILL] inventoryTransferCreate request time: ${(performance.now() - started).toFixed(0)} ms`,
+      );
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] HTTP status:",
+        response.status,
+      );
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] HTTP status text:",
+        response.statusText,
+      );
+
+      let json: any;
+
+      try {
+        json =
+          await response.json();
+
+        console.log(
+          "\n========== SHOPIFY RAW RESPONSE ==========",
+        );
+
+        console.log(
+          JSON.stringify(
+            json,
+            null,
+            2,
+          ),
+        );
+
+        console.log(
+          "==========================================\n",
+        );
+      } catch (error) {
+        debugError(
+          "SHOPIFY TRANSFER JSON PARSE ERROR",
+          error,
+        );
+
+        return {
+          ok: false,
+          error:
+            "Shopify returned an invalid response while creating the transfer.",
+          details:
+            error instanceof Error
+              ? error.message
+              : error,
+        };
+      }
+
+      // ------------------------------------------------------
+      // GRAPHQL ERRORS
+      // ------------------------------------------------------
+
+      if (json.errors) {
+        console.error(
+          "\n========== SHOPIFY GRAPHQL ERRORS ==========",
+        );
+
+        console.error(
+          JSON.stringify(
+            json.errors,
+            null,
+            2,
+          ),
+        );
+
+        console.error(
+          "============================================\n",
+        );
+
+        return {
+          ok: false,
+          error:
+            "Shopify returned a GraphQL error while creating the transfer.",
           details:
             json.errors,
         };
@@ -805,6 +1489,19 @@ export const action = async ({
           ?.inventoryTransferCreate;
 
       if (!result) {
+        console.error(
+          "[SHOPIFY TRANSFER DEBUG] No inventoryTransferCreate result.",
+        );
+
+        console.error(
+          "[SHOPIFY TRANSFER DEBUG] Full response:",
+          JSON.stringify(
+            json,
+            null,
+            2,
+          ),
+        );
+
         return {
           ok: false,
           error:
@@ -813,14 +1510,43 @@ export const action = async ({
         };
       }
 
-      if (result.userErrors?.length) {
+      // ------------------------------------------------------
+      // USER ERRORS
+      // ------------------------------------------------------
+
+      console.log(
+        "[SHOPIFY TRANSFER DEBUG] userErrors:",
+      );
+
+      console.log(
+        JSON.stringify(
+          result.userErrors ?? [],
+          null,
+          2,
+        ),
+      );
+
+      if (
+        result.userErrors?.length
+      ) {
+        console.error(
+          "\n============================================================",
+        );
+
         console.error(
           "SHOPIFY TRANSFER CREATION USER ERRORS:",
+        );
+
+        console.error(
           JSON.stringify(
             result.userErrors,
             null,
             2,
           ),
+        );
+
+        console.error(
+          "============================================================\n",
         );
 
         return {
@@ -832,9 +1558,26 @@ export const action = async ({
         };
       }
 
+      // ------------------------------------------------------
+      // TRANSFER RESULT
+      // ------------------------------------------------------
+
       if (
         !result.inventoryTransfer
       ) {
+        console.error(
+          "[SHOPIFY TRANSFER DEBUG] inventoryTransfer is NULL.",
+        );
+
+        console.error(
+          "[SHOPIFY TRANSFER DEBUG] Result:",
+          JSON.stringify(
+            result,
+            null,
+            2,
+          ),
+        );
+
         return {
           ok: false,
           error:
@@ -846,6 +1589,44 @@ export const action = async ({
       const transfer =
         result.inventoryTransfer;
 
+      console.log(
+        "\n========== SHOPIFY TRANSFER CREATED ==========",
+      );
+
+      console.log(
+        "Transfer ID:",
+        transfer.id,
+      );
+
+      console.log(
+        "Transfer name:",
+        transfer.name,
+      );
+
+      console.log(
+        "Status:",
+        transfer.status,
+      );
+
+      console.log(
+        "Reference:",
+        transfer.referenceName,
+      );
+
+      console.log(
+        "Origin:",
+        transfer.origin?.name,
+      );
+
+      console.log(
+        "Destination:",
+        transfer.destination?.name,
+      );
+
+      console.log(
+        "==============================================\n",
+      );
+
       const adminUrl =
         getTransferAdminUrl(
           session.shop,
@@ -853,34 +1634,63 @@ export const action = async ({
         );
 
       console.log(
-        "Transfer created:",
-        transfer.name,
+        "[TRANSFER DEBUG] Admin URL:",
+        adminUrl,
       );
 
       // ------------------------------------------------------
       // SAVE IMPORT HISTORY
       // ------------------------------------------------------
 
-      await prisma.importHistory.create({
-        data: {
-          shop: session.shop,
-          avizNumber:
-            aviz.number,
-          transferId:
-            transfer.id,
-          transferName:
-            transfer.name,
-        },
-      });
-
       console.log(
-        "[SMARTBILL] Import history saved:",
-        aviz.number,
+        "[TRANSFER DEBUG] Saving import history...",
       );
+
+      try {
+        await prisma.importHistory.create({
+          data: {
+            shop: session.shop,
+            avizNumber:
+              aviz.number,
+            transferId:
+              transfer.id,
+            transferName:
+              transfer.name,
+          },
+        });
+
+        console.log(
+          "[TRANSFER DEBUG] Import history saved successfully.",
+        );
+      } catch (error) {
+        debugError(
+          "PRISMA IMPORT HISTORY ERROR",
+          error,
+        );
+
+        return {
+          ok: false,
+          error:
+            "Transfer was created in Shopify, but saving import history failed.",
+          details:
+            error instanceof Error
+              ? {
+                  message:
+                    error.message,
+                  stack:
+                    error.stack,
+                }
+              : error,
+        };
+      }
 
       console.log(
         "[SMARTBILL] BEFORE RESPONSE",
         new Date().toISOString(),
+      );
+
+      console.log(
+        "========== CREATE TRANSFER END ==========\n",
       );
 
       return {
@@ -899,7 +1709,6 @@ export const action = async ({
             transfer.destination.name,
           adminUrl,
         },
-
         items: items.map(
           (item) => ({
             sku: item.sku,
@@ -916,16 +1725,44 @@ export const action = async ({
     // PREVIEW
     // ========================================================
 
+    console.log(
+      "\n========== PREVIEW START ==========",
+    );
+
     const file =
       formData.get("pdf");
 
+    console.log(
+      "[SMARTBILL] PDF form field exists:",
+      Boolean(file),
+    );
+
     if (!(file instanceof File)) {
+      console.error(
+        "[SMARTBILL] PDF field is not a File.",
+      );
+
       return {
         ok: false,
         error:
           "No PDF file was selected.",
       };
     }
+
+    console.log(
+      "[SMARTBILL] PDF file:",
+      file.name,
+    );
+
+    console.log(
+      "[SMARTBILL] PDF MIME:",
+      file.type,
+    );
+
+    console.log(
+      "[SMARTBILL] PDF size:",
+      file.size,
+    );
 
     if (file.size === 0) {
       return {
@@ -958,10 +1795,48 @@ export const action = async ({
     // 1. EXTRACT PDF TEXT
     // --------------------------------------------------------
 
-    const avizText =
-      await extractPdfText(file);
+    console.log(
+      "[SMARTBILL] STEP 1: PDF TEXT EXTRACTION",
+    );
+
+    let avizText: string;
+
+    try {
+      avizText =
+        await extractPdfText(file);
+    } catch (error) {
+      debugError(
+        "PDF EXTRACTION FAILED",
+        error,
+      );
+
+      return {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not extract text from PDF.",
+        details:
+          error instanceof Error
+            ? {
+                message:
+                  error.message,
+                stack:
+                  error.stack,
+              }
+            : error,
+      };
+    }
+
+    console.log(
+      "[SMARTBILL] STEP 1 COMPLETE",
+    );
 
     if (!avizText.trim()) {
+      console.error(
+        "[SMARTBILL] PDF returned EMPTY TEXT.",
+      );
+
       return {
         ok: false,
         error:
@@ -973,6 +1848,10 @@ export const action = async ({
     // 2. PARSE
     // --------------------------------------------------------
 
+    console.log(
+      "[SMARTBILL] STEP 2: PARSING AVIZ",
+    );
+
     let aviz: ParsedAviz;
 
     try {
@@ -981,38 +1860,49 @@ export const action = async ({
           avizText,
         );
     } catch (error) {
+      debugError(
+        "AVIZ PARSE FAILED",
+        error,
+      );
+
       return {
         ok: false,
         error:
           error instanceof Error
             ? error.message
             : "Could not parse the delivery note.",
+        details:
+          error instanceof Error
+            ? {
+                message:
+                  error.message,
+                stack:
+                  error.stack,
+              }
+            : error,
       };
     }
 
     console.log(
-      "Delivery note identified:",
-      aviz.number,
+      "[SMARTBILL] STEP 2 COMPLETE",
     );
 
     console.log(
-      "Delivery date:",
-      aviz.date,
-    );
-
-    console.log(
-      "Delivery address:",
-      aviz.deliveryAddress,
-    );
-
-    console.log(
-      "SKUs:",
-      aviz.items,
+      "[SMARTBILL] Parsed aviz:",
+      JSON.stringify(
+        aviz,
+        null,
+        2,
+      ),
     );
 
     // --------------------------------------------------------
-    // 3. CHECK IF ALREADY IMPORTED
+    // 3. CHECK DUPLICATE
     // --------------------------------------------------------
+
+    console.log(
+      "[SMARTBILL] STEP 3: DUPLICATE CHECK",
+    );
 
     const existingImport =
       await prisma.importHistory.findUnique({
@@ -1026,6 +1916,15 @@ export const action = async ({
       });
 
     if (existingImport) {
+      console.log(
+        "[SMARTBILL] DUPLICATE FOUND:",
+        JSON.stringify(
+          existingImport,
+          null,
+          2,
+        ),
+      );
+
       return {
         ok: false,
         error:
@@ -1033,18 +1932,26 @@ export const action = async ({
       };
     }
 
+    console.log(
+      "[SMARTBILL] STEP 3 COMPLETE - NOT IMPORTED BEFORE",
+    );
+
     // --------------------------------------------------------
     // 4. IDENTIFY DESTINATION
     // --------------------------------------------------------
-    //
-    // EXCLUSIVELY from aviz.deliveryAddress.
-    //
-    // CASE-SENSITIVE:
-    //
-    // Calea Floreasca -> Promenada
-    // Calea Rahovei   -> Sediu
-    //
-    // --------------------------------------------------------
+
+    console.log(
+      "\n[SMARTBILL] STEP 4: LOCATION DETECTION",
+    );
+
+    console.log(
+      "[LOCATION DEBUG] ONLY delivery address will be used.",
+    );
+
+    console.log(
+      "[LOCATION DEBUG] deliveryAddress:",
+      aviz.deliveryAddress,
+    );
 
     const destinationLocation =
       getDestinationLocation(
@@ -1052,30 +1959,29 @@ export const action = async ({
       );
 
     if (!destinationLocation) {
+      console.error(
+        "[LOCATION DEBUG] FAILED TO IDENTIFY DESTINATION.",
+      );
+
       return {
         ok: false,
         error:
           "The delivery address does not contain a valid location keyword. Expected case-sensitive 'Calea Floreasca' for Magazin Promenada or 'Calea Rahovei' for Sediu Principal.",
-
         details: {
           deliveryAddress:
             aviz.deliveryAddress,
-
           expectedKeywords: {
             promenada:
-              LOCATION_PROMENADA
-                .deliveryAddressKeyword,
-
+              LOCATION_PROMENADA.deliveryAddressKeyword,
             sediu:
-              LOCATION_SEDIU
-                .deliveryAddressKeyword,
+              LOCATION_SEDIU.deliveryAddressKeyword,
           },
         },
       };
     }
 
     // --------------------------------------------------------
-    // 5. ORIGIN = THE OTHER LOCATION
+    // 5. ORIGIN = OTHER LOCATION
     // --------------------------------------------------------
 
     const originLocation =
@@ -1084,7 +1990,7 @@ export const action = async ({
       );
 
     console.log(
-      "=== TRANSFER DIRECTION ===",
+      "\n========== TRANSFER DIRECTION ==========",
     );
 
     console.log(
@@ -1098,13 +2004,31 @@ export const action = async ({
     );
 
     console.log(
+      "Origin ID:",
+      originLocation.id,
+    );
+
+    console.log(
       "Destination:",
       destinationLocation.name,
     );
 
+    console.log(
+      "Destination ID:",
+      destinationLocation.id,
+    );
+
+    console.log(
+      "========================================\n",
+    );
+
     // --------------------------------------------------------
-    // 6. SKU LOOKUP - IN PARALLEL
+    // 6. SKU LOOKUP
     // --------------------------------------------------------
+
+    console.log(
+      "[SMARTBILL] STEP 6: SHOPIFY SKU LOOKUP",
+    );
 
     const skuStarted =
       performance.now();
@@ -1114,6 +2038,10 @@ export const action = async ({
         await Promise.all(
           aviz.items.map(
             async (item) => {
+              console.log(
+                `[SHOPIFY SKU DEBUG] Looking up ${item.sku}...`,
+              );
+
               const found =
                 await findSkuInShopify(
                   admin,
@@ -1130,11 +2058,20 @@ export const action = async ({
         );
 
       console.log(
-        `[SMARTBILL] Shopify SKU lookup: ${(performance.now() - skuStarted).toFixed(0)} ms`,
+        `[SMARTBILL] Shopify SKU lookup total: ${(performance.now() - skuStarted).toFixed(0)} ms`,
       );
 
       console.log(
-        "All SKUs were found in Shopify.",
+        "[SMARTBILL] Found items:",
+        JSON.stringify(
+          foundItems,
+          null,
+          2,
+        ),
+      );
+
+      console.log(
+        "[SMARTBILL] ALL SKUs WERE FOUND.",
       );
 
       console.log(
@@ -1142,36 +2079,48 @@ export const action = async ({
         new Date().toISOString(),
       );
 
-      // ------------------------------------------------------
-      // 7. PREVIEW
-      // ------------------------------------------------------
+      console.log(
+        "========== PREVIEW END ==========\n",
+      );
 
       return {
         ok: true,
         mode: "preview",
         aviz,
-
         direction: {
           origin:
             originLocation.name,
           destination:
             destinationLocation.name,
         },
-
         items: foundItems,
       };
     } catch (error) {
+      debugError(
+        "SHOPIFY SKU LOOKUP FAILED",
+        error,
+      );
+
       return {
         ok: false,
         error:
           error instanceof Error
             ? error.message
             : "An error occurred while looking up products in Shopify.",
+        details:
+          error instanceof Error
+            ? {
+                message:
+                  error.message,
+                stack:
+                  error.stack,
+              }
+            : error,
       };
     }
   } catch (error) {
-    console.error(
-      "SMARTBILL IMPORT ERROR:",
+    debugError(
+      "SMARTBILL IMPORT UNEXPECTED ERROR",
       error,
     );
 
@@ -1181,6 +2130,15 @@ export const action = async ({
         error instanceof Error
           ? error.message
           : "An unexpected error occurred while processing the PDF.",
+      details:
+        error instanceof Error
+          ? {
+              message:
+                error.message,
+              stack:
+                error.stack,
+            }
+          : error,
     };
   }
 };
@@ -1220,6 +2178,37 @@ export default function Index() {
       : null;
 
   // ==========================================================
+  // FRONTEND DEBUG
+  // ==========================================================
+
+  useEffect(() => {
+    if (!fetcher.data) {
+      return;
+    }
+
+    console.log(
+      "[SMARTBILL FRONTEND DEBUG] fetcher.data:",
+      fetcher.data,
+    );
+
+    if (
+      !fetcher.data.ok
+    ) {
+      console.error(
+        "[SMARTBILL FRONTEND DEBUG] SERVER ERROR:",
+        fetcher.data.error,
+      );
+
+      console.error(
+        "[SMARTBILL FRONTEND DEBUG] SERVER DETAILS:",
+        fetcher.data.details,
+      );
+    }
+  }, [
+    fetcher.data,
+  ]);
+
+  // ==========================================================
   // TOASTS
   // ==========================================================
 
@@ -1255,6 +2244,13 @@ export default function Index() {
   const uploadPdf = (
     selectedFile: File,
   ) => {
+    console.log(
+      "[SMARTBILL FRONTEND] Uploading PDF:",
+      selectedFile.name,
+      selectedFile.size,
+      selectedFile.type,
+    );
+
     const formData =
       new FormData();
 
@@ -1283,11 +2279,17 @@ export default function Index() {
   // ==========================================================
 
   const createTransfer = () => {
+    console.log(
+      "[SMARTBILL FRONTEND] CREATE TRANSFER CLICKED",
+    );
+
     if (!previewData) {
+      console.error(
+        "[SMARTBILL FRONTEND] No previewData available.",
+      );
+
       return;
     }
-
-    // Reidentificăm destinația DOAR din deliveryAddress.
 
     const destinationLocation =
       getDestinationLocation(
@@ -1296,6 +2298,10 @@ export default function Index() {
       );
 
     if (!destinationLocation) {
+      console.error(
+        "[SMARTBILL FRONTEND] Could not identify destination.",
+      );
+
       shopify.toast.show(
         "The delivery address could not be matched to a Shopify location.",
       );
@@ -1303,12 +2309,20 @@ export default function Index() {
       return;
     }
 
-    // Originea este automat cealaltă locație.
-
     const originLocation =
       getOriginLocation(
         destinationLocation,
       );
+
+    console.log(
+      "[SMARTBILL FRONTEND] Transfer origin:",
+      originLocation,
+    );
+
+    console.log(
+      "[SMARTBILL FRONTEND] Transfer destination:",
+      destinationLocation,
+    );
 
     const formData =
       new FormData();
@@ -1344,7 +2358,6 @@ export default function Index() {
 
   return (
     <s-page heading="ShopyBill">
-
       {/* ====================================================
           IMPORT
       ==================================================== */}
@@ -1562,6 +2575,32 @@ export default function Index() {
                   .error
               }
             </s-paragraph>
+
+            {fetcher.data.details ? (
+              <s-box
+                padding="small"
+                borderWidth="base"
+                borderRadius="base"
+              >
+                <pre
+                  style={{
+                    whiteSpace:
+                      "pre-wrap",
+                    overflow:
+                      "auto",
+                    fontSize:
+                      "12px",
+                  }}
+                >
+                  {JSON.stringify(
+                    fetcher.data
+                      .details,
+                    null,
+                    2,
+                  )}
+                </pre>
+              </s-box>
+            ) : null}
           </s-box>
         </s-section>
       ) : null}
@@ -1676,7 +2715,6 @@ export default function Index() {
           </s-stack>
         </s-section>
       ) : null}
-
     </s-page>
   );
 }
