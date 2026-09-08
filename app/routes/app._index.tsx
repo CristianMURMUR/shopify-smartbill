@@ -20,14 +20,14 @@ import prisma from "../db.server";
 // SHOPIFY LOCATIONS
 // ============================================================
 
-const LOCATION_1_ID = "gid://shopify/Location/86611853498";
+const LOCATION_1_ID = "gid://shopify/Location/88240128340";
 
 const LOCATION_1_NAME = "Magazin Promenada";
 
 const LOCATION_1_ADDRESS =
   "Calea Floreasca nr 244-246, Sector 1, Jud.: Bucuresti";
 
-const LOCATION_3_ID = "gid://shopify/Location/86611919034";
+const LOCATION_3_ID = "gid://shopify/Location/52695138464";
 
 const LOCATION_3_NAME = "Sediu Principal";
 
