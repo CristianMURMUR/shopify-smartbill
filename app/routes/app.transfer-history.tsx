@@ -43,7 +43,7 @@ export default function TransferHistory() {
     <s-page heading="Transfer History">
       <s-section>
         <s-button
-          href="https://admin.shopify.com/store/murmur-developer-test/transfers"
+          href="https://admin.shopify.com/store/murmur-ro/transfers"
           target="_blank"
         >
           View all transfers
