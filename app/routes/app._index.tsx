@@ -20,19 +20,27 @@ import prisma from "../db.server";
 // SHOPIFY LOCATIONS
 // ============================================================
 
-const LOCATION_1_ID = "gid://shopify/Location/88240128340";
+const LOCATION_PROMENADA = {
+  id: "gid://shopify/Location/88240128340",
+  name: "Magazin Promenada",
 
-const LOCATION_1_NAME = "Magazin Promenada";
+  // Folosim elemente stabile din adresă.
+  // Nu comparăm adresa completă.
+  addressKeywords: [
+    "calea floreasca",
+    "244-246",
+  ],
+};
 
-const LOCATION_1_ADDRESS =
-  "Calea Floreasca nr 244-246, Sector 1, Jud.: Bucuresti";
+const LOCATION_SEDIU = {
+  id: "gid://shopify/Location/52695138464",
+  name: "Sediu Principal",
 
-const LOCATION_3_ID = "gid://shopify/Location/52695138464";
-
-const LOCATION_3_NAME = "Sediu Principal";
-
-const LOCATION_3_ADDRESS =
-  "MURMUR ELECTROMAGNETICA, Calea Rahovei 266-288, corp 3, etaj 2, Sector 5, Bucuresti";
+  addressKeywords: [
+    "calea rahovei",
+    "266-288",
+  ],
+};
 
 // ============================================================
 // SHOPIFY ADMIN URL
@@ -146,28 +154,43 @@ function normalizeAddress(value: string) {
     .toLowerCase();
 }
 
+function addressMatchesKeywords(
+  address: string,
+  keywords: string[],
+) {
+  const normalized = normalizeAddress(address);
+
+  return keywords.every((keyword) =>
+    normalized.includes(
+      normalizeAddress(keyword),
+    ),
+  );
+}
+
 function getLocationByAddress(
   address: string,
 ): TransferLocation | null {
-  const normalized = normalizeAddress(address);
-
   if (
-    normalized ===
-    normalizeAddress(LOCATION_1_ADDRESS)
+    addressMatchesKeywords(
+      address,
+      LOCATION_PROMENADA.addressKeywords,
+    )
   ) {
     return {
-      id: LOCATION_1_ID,
-      name: LOCATION_1_NAME,
+      id: LOCATION_PROMENADA.id,
+      name: LOCATION_PROMENADA.name,
     };
   }
 
   if (
-    normalized ===
-    normalizeAddress(LOCATION_3_ADDRESS)
+    addressMatchesKeywords(
+      address,
+      LOCATION_SEDIU.addressKeywords,
+    )
   ) {
     return {
-      id: LOCATION_3_ID,
-      name: LOCATION_3_NAME,
+      id: LOCATION_SEDIU.id,
+      name: LOCATION_SEDIU.name,
     };
   }
 
@@ -215,57 +238,94 @@ function parseAviz(text: string): ParsedAviz {
 
   const date = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
 
-  // ----------------------------------------------------------
-  // FIRST ADDRESS = IGNORE
-  // ----------------------------------------------------------
+// ----------------------------------------------------------
+// SUPPLIER ADDRESS = IGNORE
+// ----------------------------------------------------------
 
-  const supplierAddressMatch = normalized.match(
-    /Furnizor\s+Client[\s\S]*?Adresa:\s*([^\n]+)/i,
+const supplierAddressMatch = normalized.match(
+  /Adresa:\s*([^\n]+)/i,
+);
+
+const ignoredSupplierAddress =
+  supplierAddressMatch?.[1]?.trim() ?? "";
+
+
+// ----------------------------------------------------------
+// DELIVERY ADDRESS
+// ----------------------------------------------------------
+//
+// Important:
+// "Adresa de livrare:" este întotdeauna destinația.
+//
+// Exemplu:
+// Adresa de livrare:
+// SEDIUL SECUNDAR PROMENADA MALL,
+// Calea Floreasca nr 244-246, Sector 2, Bucuresti
+//
+// sau:
+//
+// Adresa de livrare:
+// MURMUR ELECTROMAGNETICA, Calea Rahovei
+// 266-288, corp 3, etaj 2, Sector 5, Bucuresti
+// ----------------------------------------------------------
+
+const deliveryAddressMatch = normalized.match(
+  /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt|$)/i,
+);
+
+if (!deliveryAddressMatch) {
+  throw new Error(
+    "Could not identify the delivery address.",
   );
+}
 
-  const ignoredSupplierAddress =
-    supplierAddressMatch?.[1]?.trim() ?? "";
-
-  // ----------------------------------------------------------
-  // DELIVERY ADDRESS = CLIENT
-  // ----------------------------------------------------------
-
-  const deliveryAddressMatch = normalized.match(
-    /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt)/i,
-  );
-
-  if (!deliveryAddressMatch) {
-    throw new Error(
-      "Could not identify the delivery address.",
-    );
-  }
-
-  const clientAddress = deliveryAddressMatch[1]
+const clientAddress =
+  deliveryAddressMatch[1]
     .replace(/\s+/g, " ")
     .trim();
 
-  // ----------------------------------------------------------
-  // LAST SIMPLE "Adresa:"
-  // ----------------------------------------------------------
 
-  const plainAddressMatches = [
-    ...normalized.matchAll(
-      /(?:^|\n)Adresa:\s*([^\n]+)/gi,
-    ),
+// ----------------------------------------------------------
+// CLIENT / ORIGIN ADDRESS
+// ----------------------------------------------------------
+//
+// Avem două formate posibile:
+//
+// FORMAT 1:
+//
+// Adresa: Calea Floreasca 244-246...
+// Adresa de livrare: SEDIUL SECUNDAR...
+//
+// FORMAT 2:
+//
+// Adresa: Str. Miraslau...
+// Adresa de livrare: Rahova...
+// ...
+// Adresa: Calea Floreasca 244-246...
+//
+// În ambele cazuri folosim ULTIMUL "Adresa:"
+// ca adresă de origine.
+// ----------------------------------------------------------
+
+const plainAddressMatches = [
+  ...normalized.matchAll(
+    /(?:^|\n)Adresa:\s*([^\n]+)/gi,
+  ),
+];
+
+if (plainAddressMatches.length === 0) {
+  throw new Error(
+    "Could not identify the warehouse location address.",
+  );
+}
+
+const lastAddressMatch =
+  plainAddressMatches[
+    plainAddressMatches.length - 1
   ];
 
-  if (plainAddressMatches.length === 0) {
-    throw new Error(
-      "Could not identify the warehouse location address.",
-    );
-  }
-
-  const lastAddressMatch =
-    plainAddressMatches[
-      plainAddressMatches.length - 1
-    ];
-
-  const locationAddress = lastAddressMatch[1]
+const locationAddress =
+  lastAddressMatch[1]
     .replace(/\s+/g, " ")
     .trim();
 
