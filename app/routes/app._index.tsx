@@ -22,14 +22,14 @@ import prisma from "../db.server";
 
 const LOCATION_1_ID = "gid://shopify/Location/86611853498";
 
-const LOCATION_1_NAME = "Shop location";
+const LOCATION_1_NAME = "Magazin Promenada";
 
 const LOCATION_1_ADDRESS =
   "Calea Floreasca nr 244-246, Sector 1, Jud.: Bucuresti";
 
 const LOCATION_3_ID = "gid://shopify/Location/86611919034";
 
-const LOCATION_3_NAME = "My Custom Location";
+const LOCATION_3_NAME = "Sediu Principal";
 
 const LOCATION_3_ADDRESS =
   "MURMUR ELECTROMAGNETICA, Calea Rahovei 266-288, corp 3, etaj 2, Sector 5, Bucuresti";
@@ -720,17 +720,18 @@ export const action = async ({
         };
       }
 
-      if (
-        result.userErrors?.length
-      ) {
-        return {
-          ok: false,
-          error:
-            "Shopify rejected the transfer creation.",
-          details:
-            result.userErrors,
-        };
-      }
+if (result.userErrors?.length) {
+  console.error(
+    "SHOPIFY TRANSFER CREATION USER ERRORS:",
+    JSON.stringify(result.userErrors, null, 2)
+  );
+
+  return {
+    ok: false,
+    error: "Shopify rejected the transfer creation.",
+    details: result.userErrors,
+  };
+}
 
       if (
         !result.inventoryTransfer
