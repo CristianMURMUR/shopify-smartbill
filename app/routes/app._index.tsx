@@ -7,13 +7,10 @@ import type {
 } from "react-router";
 
 import { useFetcher } from "react-router";
-
 import { useAppBridge } from "@shopify/app-bridge-react";
 
 import { authenticate } from "../shopify.server";
-
 import { boundary } from "@shopify/shopify-app-react-router/server";
-
 import prisma from "../db.server";
 
 // ============================================================
@@ -21,43 +18,38 @@ import prisma from "../db.server";
 // ============================================================
 //
 // IMPORTANT:
-// Locația este identificată DOAR după "Adresa de livrare"
-// din documentul SmartBill.
+//
+// Locația este identificată DOAR după:
+//
+// Adresa de livrare:
+//
+// Căutăm CASE-SENSITIVE:
+//
+// "Calea Floreasca" -> Magazin Promenada
+// "Calea Rahovei"   -> Sediu Principal
 //
 // Nu folosim:
+//
 // - Adresa furnizorului
 // - Adresa clientului
 // - alte "Adresa:" din document
 //
-// Există doar 2 locații:
+// Există doar 2 locații.
 //
-// 1. Magazin Promenada
-// 2. Sediu Principal
-//
-// După ce identificăm DESTINAȚIA din "Adresa de livrare",
+// După identificarea DESTINAȚIEI,
 // ORIGINEA este automat cealaltă locație.
 // ============================================================
 
 const LOCATION_PROMENADA = {
   id: "gid://shopify/Location/88240128340",
   name: "Magazin Promenada",
-
-  deliveryAddressKeywords: [
-    "sediul secundar promenada mall",
-    "calea floreasca",
-    "244-246",
-  ],
+  deliveryAddressKeyword: "Calea Floreasca",
 };
 
 const LOCATION_SEDIU = {
   id: "gid://shopify/Location/52695138464",
   name: "Sediu Principal",
-
-  deliveryAddressKeywords: [
-    "murmur electromagnetica",
-    "calea rahovei",
-    "266-288",
-  ],
+  deliveryAddressKeyword: "Calea Rahovei",
 };
 
 // ============================================================
@@ -92,11 +84,7 @@ type AvizItem = {
 type ParsedAviz = {
   number: string;
   date: string;
-
-  // Adresa de livrare este SINGURA adresă folosită
-  // pentru identificarea locației.
   deliveryAddress: string;
-
   items: AvizItem[];
 };
 
@@ -163,57 +151,61 @@ export const loader = async ({
 // ============================================================
 // ADDRESS HELPERS
 // ============================================================
+//
+// IMPORTANT:
+//
+// NU facem lowercase aici.
+//
+// Matching-ul este CASE-SENSITIVE.
+//
+// Exemplu:
+//
+// "Calea Floreasca" -> MATCH
+// "Calea Rahovei"   -> MATCH
+//
+// "calea floreasca" -> NU MATCH
+// "CALEA FLOREASCA" -> NU MATCH
+//
+// ============================================================
 
-function normalizeAddress(value: string) {
+function normalizeDeliveryAddress(
+  value: string,
+) {
   return value
     .replace(/\r/g, " ")
     .replace(/\n/g, " ")
     .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+    .replace(/[ \t]+/g, " ")
+    .trim();
 }
 
 // ============================================================
 // IDENTIFY LOCATION FROM DELIVERY ADDRESS
 // ============================================================
 //
-// IMPORTANT:
+// Se caută DOAR keyword-ul principal:
 //
-// Această funcție primește EXCLUSIV textul din:
+// Calea Floreasca
+// Calea Rahovei
 //
-// Adresa de livrare:
-//
-// Nu primește "Adresa:".
-// Nu primește adresa furnizorului.
-// Nu primește alte adrese din document.
-//
+// Matching CASE-SENSITIVE.
 // ============================================================
-
-function deliveryAddressMatches(
-  address: string,
-  keywords: string[],
-) {
-  const normalized = normalizeAddress(address);
-
-  return keywords.every((keyword) =>
-    normalized.includes(
-      normalizeAddress(keyword),
-    ),
-  );
-}
 
 function getDestinationLocation(
   deliveryAddress: string,
 ): TransferLocation | null {
+  const normalizedAddress =
+    normalizeDeliveryAddress(
+      deliveryAddress,
+    );
+
   // ----------------------------------------------------------
   // PROMENADA
   // ----------------------------------------------------------
 
   if (
-    deliveryAddressMatches(
-      deliveryAddress,
-      LOCATION_PROMENADA.deliveryAddressKeywords,
+    normalizedAddress.includes(
+      LOCATION_PROMENADA.deliveryAddressKeyword,
     )
   ) {
     return {
@@ -227,9 +219,8 @@ function getDestinationLocation(
   // ----------------------------------------------------------
 
   if (
-    deliveryAddressMatches(
-      deliveryAddress,
-      LOCATION_SEDIU.deliveryAddressKeywords,
+    normalizedAddress.includes(
+      LOCATION_SEDIU.deliveryAddressKeyword,
     )
   ) {
     return {
@@ -238,20 +229,15 @@ function getDestinationLocation(
     };
   }
 
+  // ----------------------------------------------------------
+  // UNKNOWN
+  // ----------------------------------------------------------
+
   return null;
 }
 
 // ============================================================
 // GET THE OTHER LOCATION
-// ============================================================
-//
-// Avem doar 2 locații.
-//
-// Dacă destinația este Promenada,
-// originea este Sediu Principal.
-//
-// Dacă destinația este Sediu Principal,
-// originea este Promenada.
 // ============================================================
 
 function getOriginLocation(
@@ -277,7 +263,9 @@ function getOriginLocation(
 // PDF PARSER
 // ============================================================
 
-function parseAviz(text: string): ParsedAviz {
+function parseAviz(
+  text: string,
+): ParsedAviz {
   const normalized = text
     .replace(/\r/g, "")
     .replace(/[ \t]+/g, " ")
@@ -321,25 +309,19 @@ function parseAviz(text: string): ParsedAviz {
   //
   // FOARTE IMPORTANT:
   //
-  // Identificarea locației se face DOAR pe baza acestui
-  // câmp.
+  // Luăm EXCLUSIV textul de după:
   //
-  // Exemplu Promenada:
+  // "Adresa de livrare:"
   //
-  // Adresa de livrare: SEDIUL SECUNDAR PROMENADA MALL,
-  // Calea Floreasca nr 244-246, Sector 2, Bucuresti
+  // până la următorul câmp cunoscut.
   //
-  // Exemplu Sediu Principal:
-  //
-  // Adresa de livrare: MURMUR ELECTROMAGNETICA, Calea
-  // Rahovei 266-288, corp 3, etaj 2, Sector 5, Bucuresti
-  //
-  // Adresa poate ocupa mai multe linii.
+  // NU folosim niciun alt "Adresa:".
   // ----------------------------------------------------------
 
-  const deliveryAddressMatch = normalized.match(
-    /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt|$)/i,
-  );
+  const deliveryAddressMatch =
+    normalized.match(
+      /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt|$)/i,
+    );
 
   if (!deliveryAddressMatch) {
     throw new Error(
@@ -410,7 +392,10 @@ function parseAviz(text: string): ParsedAviz {
     }
 
     const quantity = Number(
-      quantityMatch[1].replace(",", "."),
+      quantityMatch[1].replace(
+        ",",
+        ".",
+      ),
     );
 
     if (
@@ -437,11 +422,8 @@ function parseAviz(text: string): ParsedAviz {
   return {
     number:
       numberMatch[1].toUpperCase(),
-
     date,
-
     deliveryAddress,
-
     items,
   };
 }
@@ -453,7 +435,8 @@ function parseAviz(text: string): ParsedAviz {
 async function extractPdfText(
   file: File,
 ) {
-  const started = performance.now();
+  const started =
+    performance.now();
 
   const arrayBuffer =
     await file.arrayBuffer();
@@ -539,11 +522,12 @@ async function findSkuInShopify(
     json.data?.productVariants?.nodes ??
     [];
 
-  const variant = nodes.find(
-    (node: any) =>
-      node.sku?.toUpperCase() ===
-      sku.toUpperCase(),
-  );
+  const variant =
+    nodes.find(
+      (node: any) =>
+        node.sku?.toUpperCase() ===
+        sku.toUpperCase(),
+    );
 
   if (!variant) {
     throw new Error(
@@ -591,8 +575,9 @@ export const action = async ({
       await request.formData();
 
     const createTransfer =
-      formData.get("createTransfer") ===
-      "true";
+      formData.get(
+        "createTransfer",
+      ) === "true";
 
     // ========================================================
     // CREATE TRANSFER
@@ -605,7 +590,9 @@ export const action = async ({
       );
 
       const transferDataRaw =
-        formData.get("transferData");
+        formData.get(
+          "transferData",
+        );
 
       if (
         typeof transferDataRaw !==
@@ -668,7 +655,8 @@ export const action = async ({
           where: {
             shop_avizNumber: {
               shop: session.shop,
-              avizNumber: aviz.number,
+              avizNumber:
+                aviz.number,
             },
           },
         });
@@ -739,7 +727,6 @@ export const action = async ({
                 name
               }
             }
-
             userErrors {
               field
               message
@@ -808,7 +795,8 @@ export const action = async ({
           ok: false,
           error:
             "Shopify returned an error while creating the transfer.",
-          details: json.errors,
+          details:
+            json.errors,
         };
       }
 
@@ -876,9 +864,12 @@ export const action = async ({
       await prisma.importHistory.create({
         data: {
           shop: session.shop,
-          avizNumber: aviz.number,
-          transferId: transfer.id,
-          transferName: transfer.name,
+          avizNumber:
+            aviz.number,
+          transferId:
+            transfer.id,
+          transferName:
+            transfer.name,
         },
       });
 
@@ -895,11 +886,11 @@ export const action = async ({
       return {
         ok: true,
         mode: "transfer",
-
         transfer: {
           id: transfer.id,
           name: transfer.name,
-          status: transfer.status,
+          status:
+            transfer.status,
           referenceName:
             transfer.referenceName,
           origin:
@@ -986,7 +977,9 @@ export const action = async ({
 
     try {
       aviz =
-        parseAviz(avizText);
+        parseAviz(
+          avizText,
+        );
     } catch (error) {
       return {
         ok: false,
@@ -1026,7 +1019,8 @@ export const action = async ({
         where: {
           shop_avizNumber: {
             shop: session.shop,
-            avizNumber: aviz.number,
+            avizNumber:
+              aviz.number,
           },
         },
       });
@@ -1043,13 +1037,12 @@ export const action = async ({
     // 4. IDENTIFY DESTINATION
     // --------------------------------------------------------
     //
-    // IMPORTANT:
+    // EXCLUSIVELY from aviz.deliveryAddress.
     //
-    // Folosim DOAR:
+    // CASE-SENSITIVE:
     //
-    // aviz.deliveryAddress
-    //
-    // Nu folosim nicio altă adresă din PDF.
+    // Calea Floreasca -> Promenada
+    // Calea Rahovei   -> Sediu
     //
     // --------------------------------------------------------
 
@@ -1062,26 +1055,20 @@ export const action = async ({
       return {
         ok: false,
         error:
-          "The delivery address does not match any configured Shopify location.",
+          "The delivery address does not contain a valid location keyword. Expected case-sensitive 'Calea Floreasca' for Magazin Promenada or 'Calea Rahovei' for Sediu Principal.",
 
         details: {
           deliveryAddress:
             aviz.deliveryAddress,
 
-          configuredLocations: {
-            promenada: {
-              name:
-                LOCATION_PROMENADA.name,
-              deliveryAddressKeywords:
-                LOCATION_PROMENADA.deliveryAddressKeywords,
-            },
+          expectedKeywords: {
+            promenada:
+              LOCATION_PROMENADA
+                .deliveryAddressKeyword,
 
-            sediu: {
-              name:
-                LOCATION_SEDIU.name,
-              deliveryAddressKeywords:
-                LOCATION_SEDIU.deliveryAddressKeywords,
-            },
+            sediu:
+              LOCATION_SEDIU
+                .deliveryAddressKeyword,
           },
         },
       };
@@ -1089,17 +1076,6 @@ export const action = async ({
 
     // --------------------------------------------------------
     // 5. ORIGIN = THE OTHER LOCATION
-    // --------------------------------------------------------
-    //
-    // Avem doar două locații.
-    //
-    // Dacă destinația este Promenada:
-    //
-    // Sediu Principal → Magazin Promenada
-    //
-    // Dacă destinația este Sediu Principal:
-    //
-    // Magazin Promenada → Sediu Principal
     // --------------------------------------------------------
 
     const originLocation =
@@ -1173,13 +1149,11 @@ export const action = async ({
       return {
         ok: true,
         mode: "preview",
-
         aviz,
 
         direction: {
           origin:
             originLocation.name,
-
           destination:
             destinationLocation.name,
         },
@@ -1314,6 +1288,7 @@ export default function Index() {
     }
 
     // Reidentificăm destinația DOAR din deliveryAddress.
+
     const destinationLocation =
       getDestinationLocation(
         previewData.aviz
@@ -1329,6 +1304,7 @@ export default function Index() {
     }
 
     // Originea este automat cealaltă locație.
+
     const originLocation =
       getOriginLocation(
         destinationLocation,
@@ -1347,12 +1323,9 @@ export default function Index() {
       JSON.stringify({
         aviz:
           previewData.aviz,
-
         items:
           previewData.items,
-
         originLocation,
-
         destinationLocation,
       }),
     );
@@ -1370,9 +1343,8 @@ export default function Index() {
   // ==========================================================
 
   return (
-    <s-page
-      heading="ShopyBill"
-    >
+    <s-page heading="ShopyBill">
+
       {/* ====================================================
           IMPORT
       ==================================================== */}
@@ -1464,11 +1436,8 @@ export default function Index() {
               <strong>
                 Date:
               </strong>{" "}
-              {
-                previewData.aviz
-                  .date ||
-                "Not specified"
-              }
+              {previewData.aviz.date ||
+                "Not specified"}
             </s-paragraph>
 
             <s-paragraph>
@@ -1707,6 +1676,7 @@ export default function Index() {
           </s-stack>
         </s-section>
       ) : null}
+
     </s-page>
   );
 }
