@@ -1,71 +1,19 @@
+import { useEffect, useState } from "react";
+
 import type {
   ActionFunctionArgs,
+  HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
 
-import {
-  useFetcher,
-  useLoaderData,
-} from "react-router";
-
+import { useFetcher } from "react-router";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 
 // ============================================================
-// TYPES
-// ============================================================
-
-type TransferLocation = {
-  id: string;
-  name: string;
-};
-
-type ParsedItem = {
-  sku: string;
-  quantity: number;
-  inventoryItemId?: string;
-};
-
-type ParsedAviz = {
-  number: string;
-  date: string;
-  deliveryAddress: string;
-  destinationLocation: TransferLocation | null;
-  originLocation: TransferLocation | null;
-  items: ParsedItem[];
-};
-
-type ActionResult = {
-  ok: boolean;
-  error?: string;
-  details?: unknown;
-  transfer?: {
-    id: string;
-    name: string;
-    status?: string;
-    referenceName?: string;
-    origin?: {
-      name: string;
-    };
-    destination?: {
-      name: string;
-    };
-  };
-};
-
-// ============================================================
 // SHOPIFY LOCATIONS
-// ============================================================
-//
-// IMPORTANT:
-// We keep the existing Shopify Location IDs.
-// Location detection is based ONLY on "Adresa de livrare:".
-//
-// CASE-SENSITIVE:
-// Calea Floreasca -> Magazin Promenada
-// Calea Rahovei   -> Sediu Principal
-//
-// All other addresses -> no match
 // ============================================================
 
 const LOCATION_PROMENADA = {
@@ -88,11 +36,8 @@ function getTransferAdminUrl(
   shop: string,
   transferId: string,
 ) {
-  const numericId =
-    transferId.split("/").pop();
-
-  const storeHandle =
-    shop.replace(".myshopify.com", "");
+  const numericId = transferId.split("/").pop();
+  const storeHandle = shop.replace(".myshopify.com", "");
 
   return numericId
     ? `https://admin.shopify.com/store/${storeHandle}/transfers/${numericId}`
@@ -100,12 +45,86 @@ function getTransferAdminUrl(
 }
 
 // ============================================================
-// ADDRESS NORMALIZATION
+// TYPES
 // ============================================================
 
-function normalizeDeliveryAddress(
-  value: string,
-) {
+type AvizItem = {
+  sku: string;
+  quantity: number;
+};
+
+type ParsedAviz = {
+  number: string;
+  date: string;
+  deliveryAddress: string;
+  items: AvizItem[];
+};
+
+type TransferItem = {
+  sku: string;
+  quantity: number;
+  productTitle: string;
+  variantTitle: string;
+  inventoryItemId: string;
+};
+
+type TransferLocation = {
+  id: string;
+  name: string;
+};
+
+type ActionResult =
+  | {
+      ok: true;
+      mode: "preview";
+      aviz: ParsedAviz;
+      direction: {
+        origin: string;
+        destination: string;
+      };
+      items: TransferItem[];
+    }
+  | {
+      ok: true;
+      mode: "transfer";
+      transfer: {
+        id: string;
+        name: string;
+        status: string;
+        referenceName: string | null;
+        origin: string;
+        destination: string;
+        adminUrl: string;
+      };
+      items: Array<{
+        sku: string;
+        quantity: number;
+        inventoryItemId: string;
+      }>;
+    }
+  | {
+      ok: false;
+      error: string;
+      details?: unknown;
+    };
+
+// ============================================================
+// LOADER
+// ============================================================
+
+export const loader = async ({
+  request,
+}: LoaderFunctionArgs) => {
+  await authenticate.admin(request);
+
+  return {};
+};
+
+// ============================================================
+// ADDRESS HELPERS
+// ============================================================
+
+function normalizeDeliveryAddress(value: string) {
   return value
     .replace(/\r/g, " ")
     .replace(/\n/g, " ")
@@ -115,38 +134,29 @@ function normalizeDeliveryAddress(
 }
 
 // ============================================================
-// DESTINATION LOCATION
+// IDENTIFY DESTINATION
 // ============================================================
 //
-// IMPORTANT:
-// This function receives ONLY the value extracted from:
-// "Adresa de livrare:"
+// CASE-SENSITIVE
 //
-// It NEVER looks at:
-// - Adresa:
-// - supplier address
-// - customer address
-// - bank address
-// - any other address
+// Calea Floreasca -> Magazin Promenada
+// Calea Rahovei   -> Sediu Principal
 //
-// Matching is CASE-SENSITIVE.
 // ============================================================
 
 function getDestinationLocation(
   deliveryAddress: string,
 ): TransferLocation | null {
   const normalizedAddress =
-    normalizeDeliveryAddress(
-      deliveryAddress,
-    );
+    normalizeDeliveryAddress(deliveryAddress);
 
   console.log(
-    "[SMARTBILL] LOCATION DETECTION - delivery address:",
+    "[LOCATION DEBUG] Normalized delivery address:",
     normalizedAddress,
   );
 
   console.log(
-    "[SMARTBILL] LOCATION DETECTION - checking Promenada keyword:",
+    "[LOCATION DEBUG] Checking Promenada keyword:",
     LOCATION_PROMENADA.deliveryAddressKeyword,
   );
 
@@ -156,8 +166,7 @@ function getDestinationLocation(
     )
   ) {
     console.log(
-      "[SMARTBILL] LOCATION DETECTION - MATCH:",
-      LOCATION_PROMENADA.name,
+      "[LOCATION DEBUG] MATCH -> Magazin Promenada",
     );
 
     return {
@@ -167,7 +176,7 @@ function getDestinationLocation(
   }
 
   console.log(
-    "[SMARTBILL] LOCATION DETECTION - checking Sediu keyword:",
+    "[LOCATION DEBUG] Checking Sediu keyword:",
     LOCATION_SEDIU.deliveryAddressKeyword,
   );
 
@@ -177,8 +186,7 @@ function getDestinationLocation(
     )
   ) {
     console.log(
-      "[SMARTBILL] LOCATION DETECTION - MATCH:",
-      LOCATION_SEDIU.name,
+      "[LOCATION DEBUG] MATCH -> Sediu Principal",
     );
 
     return {
@@ -188,17 +196,14 @@ function getDestinationLocation(
   }
 
   console.log(
-    "[SMARTBILL] LOCATION DETECTION - NO MATCH",
+    "[LOCATION DEBUG] NO LOCATION MATCH",
   );
 
   return null;
 }
 
 // ============================================================
-// ORIGIN LOCATION
-// ============================================================
-//
-// The origin is always the other Shopify location.
+// GET OTHER LOCATION
 // ============================================================
 
 function getOriginLocation(
@@ -221,134 +226,29 @@ function getOriginLocation(
 }
 
 // ============================================================
-// PDF TEXT EXTRACTION
-// ============================================================
-
-async function extractPdfText(
-  buffer: Buffer,
-): Promise<string> {
-  console.log(
-    "[SMARTBILL] PDF TEXT EXTRACTION START",
-  );
-
-  console.log(
-    "[SMARTBILL] PDF buffer size:",
-    buffer.length,
-  );
-
-  try {
-    console.log(
-      "[SMARTBILL] Importing pdf-parse...",
-    );
-
-    const pdfParseModule =
-      await import("pdf-parse");
-
-    console.log(
-      "[SMARTBILL] pdf-parse imported.",
-    );
-
-    const pdfParse =
-      pdfParseModule.default ||
-      pdfParseModule;
-
-    console.log(
-      "[SMARTBILL] Creating PDF parser...",
-    );
-
-    const parser =
-      new pdfParse.PDFParse({
-        data: buffer,
-      });
-
-    console.log(
-      "[SMARTBILL] Calling getText()...",
-    );
-
-    const result =
-      await parser.getText();
-
-    console.log(
-      "[SMARTBILL] PDF getText() finished.",
-    );
-
-    const text =
-      result?.text || "";
-
-    console.log(
-      "[SMARTBILL] Extracted PDF text length:",
-      text.length,
-    );
-
-    console.log(
-      "[SMARTBILL] PDF TEXT PREVIEW:\n",
-      text.slice(0, 3000),
-    );
-
-    return text;
-  } catch (error) {
-    console.error(
-      "[SMARTBILL] PDF TEXT EXTRACTION ERROR:",
-      error,
-    );
-
-    if (error instanceof Error) {
-      console.error(
-        "[SMARTBILL] PDF ERROR MESSAGE:",
-        error.message,
-      );
-
-      console.error(
-        "[SMARTBILL] PDF ERROR STACK:",
-        error.stack,
-      );
-    }
-
-    throw error;
-  }
-}
-
-// ============================================================
-// PARSE SMARTBILL AVIZ
+// PDF PARSER
 // ============================================================
 
 function parseAviz(
   text: string,
 ): ParsedAviz {
-  console.log(
-    "[SMARTBILL] PARSING AVIZ START",
-  );
-
-  const normalized =
-    text
-      .replace(/\r/g, "")
-      .replace(/\u00a0/g, " ");
-
-  console.log(
-    "[SMARTBILL] Normalized text length:",
-    normalized.length,
-  );
+  const normalized = text
+    .replace(/\r/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
 
   // ----------------------------------------------------------
-  // AVIZ NUMBER
+  // NUMBER
   // ----------------------------------------------------------
 
-  const numberMatch =
-    normalized.match(
-      /(?:Aviz|Avizul)\s*(?:nr\.?|num[aă]r)?\s*[:.]?\s*([A-Z0-9-]+)/i,
-    );
-
-  const avizNumber =
-    numberMatch?.[1]?.trim() || "";
-
-  console.log(
-    "[SMARTBILL] Parsed AVIZ number:",
-    avizNumber,
+  const numberMatch = normalized.match(
+    /\b(AVIZ[A-Z0-9-]+)\b/i,
   );
 
-  if (!avizNumber) {
+  if (!numberMatch) {
     throw new Error(
-      "Nu am putut identifica numărul AVIZ-ului din PDF.",
+      "Could not identify the delivery note number.",
     );
   }
 
@@ -356,34 +256,21 @@ function parseAviz(
   // DATE
   // ----------------------------------------------------------
 
-  const dateMatch =
-    normalized.match(
-      /Data\s+emiterii\s*:\s*(\d{2})\/(\d{2})\/(\d{4})/i,
+  const dateMatch = normalized.match(
+    /Data\s+emiterii\s*:\s*(\d{2})\/(\d{2})\/(\d{4})/i,
+  );
+
+  if (!dateMatch) {
+    throw new Error(
+      "Could not identify the delivery note date.",
     );
-
-  let avizDate = "";
-
-  if (dateMatch) {
-    const [, day, month, year] =
-      dateMatch;
-
-    avizDate =
-      `${year}-${month}-${day}`;
   }
 
-  console.log(
-    "[SMARTBILL] Parsed AVIZ date:",
-    avizDate,
-  );
+  const date =
+    `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
 
   // ----------------------------------------------------------
   // DELIVERY ADDRESS
-  // ----------------------------------------------------------
-  //
-  // IMPORTANT:
-  // ONLY "Adresa de livrare:" is used.
-  //
-  // Plain "Adresa:" is deliberately NOT used.
   // ----------------------------------------------------------
 
   const deliveryAddressMatch =
@@ -391,63 +278,31 @@ function parseAviz(
       /Adresa\s+de\s+livrare:\s*([\s\S]*?)(?=\nIBAN|\nBanca:|\nAdresa:|\nCIF:|\nReg\.\s*com\.|\nNr\.\s*crt|$)/i,
     );
 
-  const deliveryAddress =
-    deliveryAddressMatch?.[1]
-      ?.replace(/\s+/g, " ")
-      .trim() || "";
+  if (!deliveryAddressMatch) {
+    throw new Error(
+      "Could not identify the delivery address.",
+    );
+  }
 
-  console.log(
-    "[SMARTBILL] Parsed delivery address:",
-    deliveryAddress,
-  );
+  const deliveryAddress =
+    deliveryAddressMatch[1]
+      .replace(/\s+/g, " ")
+      .trim();
 
   if (!deliveryAddress) {
     throw new Error(
-      'Nu am putut identifica "Adresa de livrare:" din PDF.',
+      "The delivery address is empty.",
     );
   }
-
-  // ----------------------------------------------------------
-  // LOCATION DETECTION
-  // ----------------------------------------------------------
-
-  const destinationLocation =
-    getDestinationLocation(
-      deliveryAddress,
-    );
-
-  if (!destinationLocation) {
-    console.log(
-      "[SMARTBILL] No destination location matched.",
-    );
-  } else {
-    console.log(
-      "[SMARTBILL] Destination location:",
-      destinationLocation,
-    );
-  }
-
-  const originLocation =
-    destinationLocation
-      ? getOriginLocation(
-          destinationLocation,
-        )
-      : null;
-
-  if (originLocation) {
-    console.log(
-      "[SMARTBILL] Origin location:",
-      originLocation,
-    );
-  }
-
-  // ----------------------------------------------------------
-  // ITEMS / SKU
-  // ----------------------------------------------------------
 
   console.log(
-    "[SMARTBILL] Searching for SKU values...",
+    "[SMARTBILL] Delivery address used for location identification:",
+    deliveryAddress,
   );
+
+  // ----------------------------------------------------------
+  // SKU + QUANTITY
+  // ----------------------------------------------------------
 
   const skuMatches = [
     ...normalized.matchAll(
@@ -455,46 +310,30 @@ function parseAviz(
     ),
   ];
 
-  console.log(
-    "[SMARTBILL] SKU matches found:",
-    skuMatches.length,
-  );
-
-  const items: ParsedItem[] = [];
+  const items: AvizItem[] = [];
 
   for (
-    let index = 0;
-    index < skuMatches.length;
-    index++
+    let i = 0;
+    i < skuMatches.length;
+    i++
   ) {
-    const match =
-      skuMatches[index];
-
     const sku =
-      match[1]?.trim();
-
-    if (!sku) {
-      continue;
-    }
+      skuMatches[i][1].toUpperCase();
 
     const start =
-      match.index ?? 0;
+      skuMatches[i].index ?? 0;
 
-    const nextStart =
-      skuMatches[index + 1]
-        ?.index ??
-      normalized.length;
+    const end =
+      i + 1 < skuMatches.length
+        ? skuMatches[i + 1].index ??
+          normalized.length
+        : normalized.length;
 
     const block =
       normalized.slice(
         start,
-        nextStart,
+        end,
       );
-
-    console.log(
-      `[SMARTBILL] SKU ${index + 1} block:\n`,
-      block.slice(0, 500),
-    );
 
     const quantityMatch =
       block.match(
@@ -502,260 +341,292 @@ function parseAviz(
       );
 
     if (!quantityMatch) {
-      console.log(
-        `[SMARTBILL] No quantity found for SKU ${sku}.`,
+      throw new Error(
+        `Could not identify the quantity for SKU ${sku}.`,
       );
-
-      continue;
     }
 
-    const quantity =
-      Number(
-        quantityMatch[1]
-          .replace(",", "."),
-      );
+    const quantity = Number(
+      quantityMatch[1].replace(",", "."),
+    );
 
     if (
       !Number.isFinite(quantity) ||
       quantity <= 0
     ) {
-      console.log(
-        `[SMARTBILL] Invalid quantity for SKU ${sku}:`,
-        quantityMatch[1],
+      throw new Error(
+        `Invalid quantity for SKU ${sku}.`,
       );
-
-      continue;
     }
 
     items.push({
       sku,
       quantity,
     });
-
-    console.log(
-      "[SMARTBILL] Parsed item:",
-      {
-        sku,
-        quantity,
-      },
-    );
   }
-
-  console.log(
-    "[SMARTBILL] Total parsed items:",
-    items.length,
-  );
 
   if (items.length === 0) {
     throw new Error(
-      "Nu am putut identifica produsele/SKU-urile din PDF.",
+      "No SKUs were identified in the PDF.",
     );
   }
 
-  const result: ParsedAviz = {
-    number: avizNumber,
-    date: avizDate,
+  return {
+    number:
+      numberMatch[1].toUpperCase(),
+    date,
     deliveryAddress,
-    destinationLocation,
-    originLocation,
     items,
   };
-
-  console.log(
-    "[SMARTBILL] PARSED AVIZ RESULT:",
-    JSON.stringify(
-      result,
-      null,
-      2,
-    ),
-  );
-
-  return result;
 }
 
 // ============================================================
-// SHOPIFY INVENTORY ITEM LOOKUP
+// PDF TEXT EXTRACTION
 // ============================================================
 
-async function findInventoryItemBySku(
-  admin: any,
-  sku: string,
+async function extractPdfText(
+  file: File,
 ) {
-  console.log(
-    "[SMARTBILL] Shopify SKU lookup START:",
-    sku,
-  );
+  const started =
+    performance.now();
 
-  const query = `#graphql
-    query FindInventoryItemBySku($query: String!) {
-      productVariants(
-        first: 10
-        query: $query
-      ) {
-        nodes {
-          id
-          sku
-          inventoryItem {
-            id
-          }
-          product {
-            id
-            title
-          }
-        }
-      }
-    }
-  `;
+  const arrayBuffer =
+    await file.arrayBuffer();
 
-  const variables = {
-    query: `sku:${sku}`,
-  };
+  const buffer =
+    Buffer.from(arrayBuffer);
 
   console.log(
-    "[SMARTBILL] SKU lookup variables:",
-    JSON.stringify(
-      variables,
-      null,
-      2,
-    ),
+    `[SMARTBILL] PDF received: ${file.name} (${buffer.length} bytes)`,
   );
+
+  const { PDFParse } =
+    await import("pdf-parse");
+
+  const parser = new PDFParse({
+    data: buffer,
+  });
 
   try {
-    const response =
-      await admin.graphql(
-        query,
-        {
-          variables,
-        },
-      );
-
-    const json =
-      await response.json();
+    const result =
+      await parser.getText();
 
     console.log(
-      "[SMARTBILL] SKU lookup raw response:",
-      JSON.stringify(
-        json,
-        null,
-        2,
-      ),
+      `[SMARTBILL] PDF parse: ${(performance.now() - started).toFixed(0)} ms`,
     );
-
-    if (json.errors) {
-      console.error(
-        "[SMARTBILL] SKU lookup GraphQL errors:",
-        JSON.stringify(
-          json.errors,
-          null,
-          2,
-        ),
-      );
-    }
-
-    const nodes =
-      json.data
-        ?.productVariants
-        ?.nodes || [];
 
     console.log(
-      "[SMARTBILL] SKU lookup nodes count:",
-      nodes.length,
+      `[SMARTBILL] Extracted text: ${result.text.length} characters`,
     );
 
-    const exactMatch =
-      nodes.find(
-        (node: any) =>
-          node?.sku === sku,
-      );
-
-    if (!exactMatch) {
-      console.log(
-        "[SMARTBILL] No exact SKU match found:",
-        sku,
-      );
-
-      return null;
-    }
-
-    console.log(
-      "[SMARTBILL] Exact SKU match found:",
-      JSON.stringify(
-        exactMatch,
-        null,
-        2,
-      ),
-    );
-
-    return exactMatch
-      .inventoryItem?.id || null;
-  } catch (error) {
-    console.error(
-      "[SMARTBILL] SKU lookup ERROR:",
-      sku,
-      error,
-    );
-
-    throw error;
+    return result.text;
+  } finally {
+    await parser.destroy();
   }
 }
 
 // ============================================================
-// LOADER
+// SKU LOOKUP
 // ============================================================
 
-export const loader = async ({
-  request,
-}: LoaderFunctionArgs) => {
+async function findSkuInShopify(
+  admin: any,
+  sku: string,
+): Promise<TransferItem> {
   console.log(
-    "[SMARTBILL] LOADER START",
+    `[SHOPIFY SKU] Looking up SKU: ${sku}`,
   );
 
-  const { session } =
-    await authenticate.admin(request);
+  const response =
+    await admin.graphql(
+      `#graphql
+        query FindVariantBySku($query: String!) {
+          productVariants(
+            first: 10
+            query: $query
+          ) {
+            nodes {
+              sku
+              title
+              product {
+                title
+              }
+              inventoryItem {
+                id
+              }
+            }
+          }
+        }
+      `,
+      {
+        variables: {
+          query: `sku:${sku}`,
+        },
+      },
+    );
+
+  const json =
+    (await response.json()) as any;
 
   console.log(
-    "[SMARTBILL] LOADER SHOP:",
-    session.shop,
+    `[SHOPIFY SKU] Response for ${sku}:`,
+    JSON.stringify(
+      json,
+      null,
+      2,
+    ),
   );
 
-  const importHistory =
-    await prisma.importHistory.findMany({
-      where: {
-        shop: session.shop,
-      },
+  if (json.errors) {
+    throw new Error(
+      `Shopify SKU lookup failed for ${sku}.`,
+    );
+  }
 
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
+  const nodes =
+    json.data?.productVariants?.nodes ??
+    [];
+
+  const variant =
+    nodes.find(
+      (node: any) =>
+        node.sku?.toUpperCase() ===
+        sku.toUpperCase(),
+    );
+
+  if (!variant) {
+    throw new Error(
+      `SKU ${sku} was not found in Shopify.`,
+    );
+  }
+
+  if (
+    !variant.inventoryItem?.id
+  ) {
+    throw new Error(
+      `SKU ${sku} does not have an Inventory Item in Shopify.`,
+    );
+  }
 
   console.log(
-    "[SMARTBILL] History entries:",
-    importHistory.length,
+    `[SHOPIFY SKU] FOUND ${sku}`,
+    {
+      productTitle:
+        variant.product?.title,
+      variantTitle:
+        variant.title,
+      inventoryItemId:
+        variant.inventoryItem.id,
+    },
   );
 
   return {
-    importHistory:
-      importHistory.map(
-        (item) => ({
-          id: item.id,
-          avizNumber:
-            item.avizNumber,
-          transferId:
-            item.transferId,
-          transferName:
-            item.transferName,
-          createdAt:
-            item.createdAt.toISOString(),
-          transferUrl:
-            getTransferAdminUrl(
-              session.shop,
-              item.transferId,
-            ),
-        }),
-      ),
+    sku,
+    quantity: 0,
+    productTitle:
+      variant.product?.title ?? "",
+    variantTitle:
+      variant.title ?? "",
+    inventoryItemId:
+      variant.inventoryItem.id,
   };
-};
+}
+
+// ============================================================
+// VERIFY SHOPIFY LOCATIONS
+// ============================================================
+//
+// IMPORTANT:
+// We do NOT replace the IDs.
+// We only verify what Shopify returns for them.
+//
+// ============================================================
+
+async function verifyShopifyLocations(
+  admin: any,
+) {
+  console.log(
+    "============================================================",
+  );
+
+  console.log(
+    "[LOCATION VERIFY] START",
+  );
+
+  console.log(
+    "[LOCATION VERIFY] Promenada ID:",
+    LOCATION_PROMENADA.id,
+  );
+
+  console.log(
+    "[LOCATION VERIFY] Sediu ID:",
+    LOCATION_SEDIU.id,
+  );
+
+  const response =
+    await admin.graphql(
+      `#graphql
+        query VerifyLocations(
+          $promenadaId: ID!
+          $sediuId: ID!
+        ) {
+          promenada: location(id: $promenadaId) {
+            id
+            name
+            isActive
+          }
+
+          sediu: location(id: $sediuId) {
+            id
+            name
+            isActive
+          }
+        }
+      `,
+      {
+        variables: {
+          promenadaId:
+            LOCATION_PROMENADA.id,
+
+          sediuId:
+            LOCATION_SEDIU.id,
+        },
+      },
+    );
+
+  const json =
+    (await response.json()) as any;
+
+  console.log(
+    "[LOCATION VERIFY] Shopify response:",
+    JSON.stringify(
+      json,
+      null,
+      2,
+    ),
+  );
+
+  if (json.errors) {
+    console.error(
+      "[LOCATION VERIFY] GraphQL errors:",
+      JSON.stringify(
+        json.errors,
+        null,
+        2,
+      ),
+    );
+  }
+
+  console.log(
+    "[LOCATION VERIFY] END",
+  );
+
+  console.log(
+    "============================================================",
+  );
+
+  return json;
+}
 
 // ============================================================
 // ACTION
@@ -763,873 +634,1041 @@ export const loader = async ({
 
 export const action = async ({
   request,
-}: ActionFunctionArgs) => {
-  console.log(
-    "============================================================",
-  );
-
-  console.log(
-    "[SMARTBILL] ACTION START",
-  );
-
-  const startedAt =
-    Date.now();
+}: ActionFunctionArgs): Promise<ActionResult> => {
+  const { admin, session } =
+    await authenticate.admin(request);
 
   try {
-    const { admin, session } =
-      await authenticate.admin(
-        request,
-      );
+    console.log(
+      "============================================================",
+    );
 
     console.log(
-      "[SMARTBILL] Authenticated shop:",
+      "[SMARTBILL] REQUEST START",
+      new Date().toISOString(),
+    );
+
+    console.log(
+      "[SMARTBILL] SHOP:",
       session.shop,
     );
 
     const formData =
       await request.formData();
 
-    const actionType =
-      formData.get("action");
-
-    console.log(
-      "[SMARTBILL] Action type:",
-      actionType,
-    );
-
-    // ========================================================
-    // DELETE HISTORY
-    // ========================================================
-
-    if (
-      actionType === "delete"
-    ) {
-      const id =
-        formData.get("id");
-
-      console.log(
-        "[SMARTBILL] DELETE HISTORY REQUEST:",
-        {
-          id,
-          shop: session.shop,
-        },
-      );
-
-      if (
-        typeof id !== "string" ||
-        !id
-      ) {
-        return {
-          ok: false,
-          error:
-            "Invalid transfer ID.",
-        };
-      }
-
-      const historyEntry =
-        await prisma.importHistory.findFirst({
-          where: {
-            id,
-            shop: session.shop,
-          },
-        });
-
-      if (!historyEntry) {
-        return {
-          ok: false,
-          error:
-            "Transfer history entry not found.",
-        };
-      }
-
-      await prisma.importHistory.delete({
-        where: {
-          id: historyEntry.id,
-        },
-      });
-
-      console.log(
-        "[SMARTBILL] Transfer history deleted:",
-        {
-          shop: session.shop,
-          id: historyEntry.id,
-          avizNumber:
-            historyEntry.avizNumber,
-          transferName:
-            historyEntry.transferName,
-        },
-      );
-
-      return {
-        ok: true,
-      };
-    }
+    const createTransfer =
+      formData.get(
+        "createTransfer",
+      ) === "true";
 
     // ========================================================
     // CREATE TRANSFER
     // ========================================================
 
-    if (
-      actionType !== "createTransfer"
-    ) {
-      console.error(
-        "[SMARTBILL] UNKNOWN ACTION:",
-        actionType,
-      );
-
-      return {
-        ok: false,
-        error:
-          "Unknown action.",
-      };
-    }
-
-    console.log(
-      "[SMARTBILL] CREATE TRANSFER BRANCH",
-    );
-
-    const file =
-      formData.get("file");
-
-    console.log(
-      "[SMARTBILL] File received:",
-      file instanceof File
-        ? {
-            name: file.name,
-            size: file.size,
-            type: file.type,
-          }
-        : typeof file,
-    );
-
-    if (!(file instanceof File)) {
-      return {
-        ok: false,
-        error:
-          "PDF file was not received.",
-      };
-    }
-
-    if (
-      file.size === 0
-    ) {
-      return {
-        ok: false,
-        error:
-          "PDF file is empty.",
-      };
-    }
-
-    // ========================================================
-    // READ PDF
-    // ========================================================
-
-    console.log(
-      "[SMARTBILL] Reading PDF buffer...",
-    );
-
-    const arrayBuffer =
-      await file.arrayBuffer();
-
-    const buffer =
-      Buffer.from(arrayBuffer);
-
-    console.log(
-      "[SMARTBILL] PDF buffer created:",
-      buffer.length,
-    );
-
-    const text =
-      await extractPdfText(
-        buffer,
-      );
-
-    console.log(
-      "[SMARTBILL] PDF text extraction complete.",
-    );
-
-    // ========================================================
-    // PARSE AVIZ
-    // ========================================================
-
-    const aviz =
-      parseAviz(text);
-
-    console.log(
-      "[SMARTBILL] Parsed AVIZ:",
-      JSON.stringify(
-        aviz,
-        null,
-        2,
-      ),
-    );
-
-    // ========================================================
-    // LOCATION CHECK
-    // ========================================================
-
-    if (
-      !aviz.destinationLocation
-    ) {
-      return {
-        ok: false,
-        error:
-          'Nu am putut identifica locația destinație din "Adresa de livrare:". Sunt acceptate doar "Calea Floreasca" sau "Calea Rahovei".',
-        details: {
-          deliveryAddress:
-            aviz.deliveryAddress,
-        },
-      };
-    }
-
-    if (
-      !aviz.originLocation
-    ) {
-      return {
-        ok: false,
-        error:
-          "Origin location could not be determined.",
-      };
-    }
-
-    console.log(
-      "[SMARTBILL] FINAL ORIGIN:",
-      {
-        id: aviz.originLocation.id,
-        name: aviz.originLocation.name,
-      },
-    );
-
-    console.log(
-      "[SMARTBILL] FINAL DESTINATION:",
-      {
-        id: aviz.destinationLocation.id,
-        name: aviz.destinationLocation.name,
-      },
-    );
-
-    // ========================================================
-    // DUPLICATE HISTORY CHECK
-    // ========================================================
-
-    console.log(
-      "[SMARTBILL] Checking duplicate AVIZ in ImportHistory...",
-    );
-
-    const existingHistory =
-      await prisma.importHistory.findFirst({
-        where: {
-          shop: session.shop,
-          avizNumber: aviz.number,
-        },
-      });
-
-    if (existingHistory) {
+    if (createTransfer) {
       console.log(
-        "[SMARTBILL] DUPLICATE AVIZ FOUND:",
-        existingHistory,
+        "============================================================",
       );
 
-      return {
-        ok: false,
-        error:
-          `AVIZ ${aviz.number} has already been imported.`,
-        details: {
-          existingTransferId:
-            existingHistory.transferId,
-          existingTransferName:
-            existingHistory.transferName,
-        },
-      };
-    }
-
-    console.log(
-      "[SMARTBILL] No duplicate AVIZ found.",
-    );
-
-    // ========================================================
-    // SKU -> INVENTORY ITEM ID
-    // ========================================================
-
-    const resolvedItems: ParsedItem[] =
-      [];
-
-    for (
-      const item of aviz.items
-    ) {
       console.log(
-        "[SMARTBILL] Resolving SKU:",
-        item.sku,
+        "[SMARTBILL] CREATE TRANSFER START",
+        new Date().toISOString(),
       );
 
-      const inventoryItemId =
-        await findInventoryItemBySku(
-          admin,
-          item.sku,
+      const transferDataRaw =
+        formData.get(
+          "transferData",
         );
 
-      if (!inventoryItemId) {
-        console.error(
-          "[SMARTBILL] INVENTORY ITEM NOT FOUND:",
-          item.sku,
+      if (
+        typeof transferDataRaw !==
+        "string"
+      ) {
+        return {
+          ok: false,
+          error:
+            "Preview data is missing. Please process the PDF again.",
+        };
+      }
+
+      let transferData: {
+        aviz: ParsedAviz;
+        items: TransferItem[];
+        originLocation: TransferLocation;
+        destinationLocation: TransferLocation;
+      };
+
+      try {
+        transferData =
+          JSON.parse(
+            transferDataRaw,
+          );
+      } catch {
+        return {
+          ok: false,
+          error:
+            "The transfer data is invalid.",
+        };
+      }
+
+      const {
+        aviz,
+        items,
+        originLocation,
+        destinationLocation,
+      } = transferData;
+
+      if (
+        !aviz?.number ||
+        !originLocation?.id ||
+        !destinationLocation?.id ||
+        !Array.isArray(items) ||
+        items.length === 0
+      ) {
+        return {
+          ok: false,
+          error:
+            "Incomplete data for creating the transfer.",
+        };
+      }
+
+      // ------------------------------------------------------
+      // DEBUG - TRANSFER INPUT
+      // ------------------------------------------------------
+
+      console.log(
+        "============================================================",
+      );
+
+      console.log(
+        "[TRANSFER DEBUG] AVIZ:",
+        aviz.number,
+      );
+
+      console.log(
+        "[TRANSFER DEBUG] DATE:",
+        aviz.date,
+      );
+
+      console.log(
+        "[TRANSFER DEBUG] DELIVERY ADDRESS:",
+        aviz.deliveryAddress,
+      );
+
+      console.log(
+        "[TRANSFER DEBUG] ORIGIN:",
+        JSON.stringify(
+          originLocation,
+          null,
+          2,
+        ),
+      );
+
+      console.log(
+        "[TRANSFER DEBUG] DESTINATION:",
+        JSON.stringify(
+          destinationLocation,
+          null,
+          2,
+        ),
+      );
+
+      console.log(
+        "[TRANSFER DEBUG] ITEMS:",
+        JSON.stringify(
+          items,
+          null,
+          2,
+        ),
+      );
+
+      // ------------------------------------------------------
+      // DUPLICATE CHECK
+      // ------------------------------------------------------
+
+      const existingImport =
+        await prisma.importHistory.findUnique({
+          where: {
+            shop_avizNumber: {
+              shop: session.shop,
+              avizNumber:
+                aviz.number,
+            },
+          },
+        });
+
+      if (existingImport) {
+        console.log(
+          "[TRANSFER DEBUG] DUPLICATE FOUND:",
+          existingImport,
         );
 
         return {
           ok: false,
           error:
-            `SKU ${item.sku} was not found in Shopify.`,
+            `Delivery note ${aviz.number} has already been imported as ${existingImport.transferName}.`,
+        };
+      }
+
+      // ------------------------------------------------------
+      // VERIFY LOCATIONS
+      // ------------------------------------------------------
+
+      const locationVerification =
+        await verifyShopifyLocations(
+          admin,
+        );
+
+      console.log(
+        "[TRANSFER DEBUG] Location verification result:",
+        JSON.stringify(
+          locationVerification,
+          null,
+          2,
+        ),
+      );
+
+      // ------------------------------------------------------
+      // BUILD LINE ITEMS
+      // ------------------------------------------------------
+
+      const lineItems =
+        items.map(
+          (item) => ({
+            inventoryItemId:
+              item.inventoryItemId,
+
+            quantity:
+              item.quantity,
+          }),
+        );
+
+      console.log(
+        "[TRANSFER DEBUG] LINE ITEMS SENT TO SHOPIFY:",
+        JSON.stringify(
+          lineItems,
+          null,
+          2,
+        ),
+      );
+
+      // ------------------------------------------------------
+      // IDEMPOTENCY
+      // ------------------------------------------------------
+      //
+      // NEW KEY FOR EVERY MANUAL CREATE ATTEMPT.
+      //
+      // Shopify requires an idempotency key for this mutation
+      // on API versions where the feature is required.
+      //
+      // A previous failed request must not be retried using
+      // the same old key.
+      //
+      // ------------------------------------------------------
+
+      const idempotencyKey =
+        `smartbill-${session.shop}-${aviz.number}-${crypto.randomUUID()}`;
+
+      console.log(
+        "[TRANSFER DEBUG] IDEMPOTENCY KEY:",
+        idempotencyKey,
+      );
+
+      // ------------------------------------------------------
+      // SHOPIFY INPUT
+      // ------------------------------------------------------
+
+      const shopifyInput = {
+        originLocationId:
+          originLocation.id,
+
+        destinationLocationId:
+          destinationLocation.id,
+
+        referenceName:
+          aviz.number,
+
+        dateCreated:
+          aviz.date
+            ? `${aviz.date}T00:00:00Z`
+            : undefined,
+
+        note:
+          `SmartBill delivery note ${aviz.number}`,
+
+        lineItems,
+      };
+
+      console.log(
+        "============================================================",
+      );
+
+      console.log(
+        "[SHOPIFY CREATE] INPUT:",
+        JSON.stringify(
+          shopifyInput,
+          null,
+          2,
+        ),
+      );
+
+      console.log(
+        "[SHOPIFY CREATE] ORIGIN LOCATION ID:",
+        originLocation.id,
+      );
+
+      console.log(
+        "[SHOPIFY CREATE] ORIGIN LOCATION NAME:",
+        originLocation.name,
+      );
+
+      console.log(
+        "[SHOPIFY CREATE] DESTINATION LOCATION ID:",
+        destinationLocation.id,
+      );
+
+      console.log(
+        "[SHOPIFY CREATE] DESTINATION LOCATION NAME:",
+        destinationLocation.name,
+      );
+
+      console.log(
+        "[SHOPIFY CREATE] IDEMPOTENCY:",
+        idempotencyKey,
+      );
+
+      console.log(
+        "[SHOPIFY CREATE] START:",
+        new Date().toISOString(),
+      );
+
+      // ------------------------------------------------------
+      // MUTATION
+      // ------------------------------------------------------
+      //
+      // IMPORTANT:
+      //
+      // origin/destination are LocationSnapshot.
+      //
+      // LocationSnapshot DOES NOT have "id".
+      //
+      // Therefore we request ONLY "name" here.
+      //
+      // The actual Location IDs are already correctly sent
+      // through originLocationId and destinationLocationId
+      // in shopifyInput above.
+      //
+      // ------------------------------------------------------
+
+      const mutation = `#graphql
+        mutation CreateInventoryTransfer(
+          $input: InventoryTransferCreateInput!
+          $idempotencyKey: String!
+        ) {
+          inventoryTransferCreate(
+            input: $input
+          ) @idempotent(
+            key: $idempotencyKey
+          ) {
+            inventoryTransfer {
+              id
+              name
+              status
+              referenceName
+
+              origin {
+                name
+              }
+
+              destination {
+                name
+              }
+            }
+
+            userErrors {
+              field
+              message
+              code
+            }
+          }
+        }
+      `;
+
+      const started =
+        performance.now();
+
+      console.log(
+        "[SHOPIFY CREATE] Sending mutation...",
+      );
+
+      const response =
+        await admin.graphql(
+          mutation,
+          {
+            variables: {
+              input:
+                shopifyInput,
+
+              idempotencyKey,
+            },
+          },
+        );
+
+      const json =
+        (await response.json()) as any;
+
+      const duration =
+        performance.now() -
+        started;
+
+      // ------------------------------------------------------
+      // FULL SHOPIFY RESPONSE
+      // ------------------------------------------------------
+
+      console.log(
+        "============================================================",
+      );
+
+      console.log(
+        `[SHOPIFY CREATE] RESPONSE TIME: ${duration.toFixed(0)} ms`,
+      );
+
+      console.log(
+        "[SHOPIFY CREATE] FULL JSON RESPONSE:",
+        JSON.stringify(
+          json,
+          null,
+          2,
+        ),
+      );
+
+      // ------------------------------------------------------
+      // GRAPHQL ERRORS
+      // ------------------------------------------------------
+
+      if (json.errors) {
+        console.error(
+          "============================================================",
+        );
+
+        console.error(
+          "[SHOPIFY CREATE] GRAPHQL ERRORS:",
+          JSON.stringify(
+            json.errors,
+            null,
+            2,
+          ),
+        );
+
+        console.error(
+          "[SHOPIFY CREATE] INPUT:",
+          JSON.stringify(
+            shopifyInput,
+            null,
+            2,
+          ),
+        );
+
+        console.error(
+          "[SHOPIFY CREATE] IDEMPOTENCY:",
+          idempotencyKey,
+        );
+
+        return {
+          ok: false,
+          error:
+            "Shopify returned a GraphQL error while creating the transfer.",
+          details:
+            json.errors,
+        };
+      }
+
+      const result =
+        json.data
+          ?.inventoryTransferCreate;
+
+      if (!result) {
+        console.error(
+          "[SHOPIFY CREATE] NO MUTATION RESULT:",
+          JSON.stringify(
+            json,
+            null,
+            2,
+          ),
+        );
+
+        return {
+          ok: false,
+          error:
+            "Shopify did not return a transfer creation result.",
+          details: json,
+        };
+      }
+
+      // ------------------------------------------------------
+      // USER ERRORS
+      // ------------------------------------------------------
+
+      if (
+        result.userErrors?.length
+      ) {
+        console.error(
+          "============================================================",
+        );
+
+        console.error(
+          "[SHOPIFY CREATE] USER ERRORS:",
+        );
+
+        console.error(
+          JSON.stringify(
+            result.userErrors,
+            null,
+            2,
+          ),
+        );
+
+        console.error(
+          "[SHOPIFY CREATE] INPUT THAT CAUSED ERROR:",
+        );
+
+        console.error(
+          JSON.stringify(
+            shopifyInput,
+            null,
+            2,
+          ),
+        );
+
+        console.error(
+          "[SHOPIFY CREATE] IDEMPOTENCY KEY:",
+          idempotencyKey,
+        );
+
+        console.error(
+          "============================================================",
+        );
+
+        const firstError =
+          result.userErrors[0];
+
+        let readableError =
+          "Shopify rejected the transfer creation.";
+
+        if (
+          firstError.code ===
+          "TRANSFER_NOT_FOUND"
+        ) {
+          readableError =
+            "Shopify says the inventory transfer cannot be found.";
+        }
+
+        if (
+          firstError.code ===
+          "IDEMPOTENCY_PREVIOUS_ATTEMPT_FAILED"
+        ) {
+          readableError =
+            "Shopify says the previous attempt with this idempotency key failed. A new idempotency key was used for this attempt.";
+        }
+
+        if (
+          firstError.code ===
+          "LOCATION_NOT_FOUND"
+        ) {
+          readableError =
+            "Shopify says one of the selected locations cannot be found.";
+        }
+
+        if (
+          firstError.code ===
+          "LOCATION_NOT_ACTIVE"
+        ) {
+          readableError =
+            "Shopify says one of the selected locations is inactive.";
+        }
+
+        if (
+          firstError.code ===
+          "INVENTORY_STATE_NOT_ACTIVE"
+        ) {
+          readableError =
+            "Shopify says one or more inventory items are not stocked at the selected location.";
+        }
+
+        if (
+          firstError.code ===
+          "ITEM_NOT_FOUND"
+        ) {
+          readableError =
+            "Shopify says one of the inventory items cannot be found.";
+        }
+
+        if (
+          firstError.code ===
+          "TRANSFER_ORIGIN_CANNOT_BE_THE_SAME_AS_DESTINATION"
+        ) {
+          readableError =
+            "Shopify says the origin and destination locations cannot be the same.";
+        }
+
+        return {
+          ok: false,
+          error: readableError,
           details: {
-            sku: item.sku,
+            userErrors:
+              result.userErrors,
+
+            originLocationId:
+              originLocation.id,
+
+            destinationLocationId:
+              destinationLocation.id,
+
+            lineItems,
+
+            idempotencyKey,
           },
         };
       }
 
-      resolvedItems.push({
-        ...item,
-        inventoryItemId,
-      });
-
-      console.log(
-        "[SMARTBILL] SKU resolved:",
-        {
-          sku: item.sku,
-          inventoryItemId,
-          quantity:
-            item.quantity,
-        },
-      );
-    }
-
-    // ========================================================
-    // FINAL LINE ITEMS
-    // ========================================================
-
-    const lineItems =
-      resolvedItems.map(
-        (item) => ({
-          inventoryItemId:
-            item.inventoryItemId!,
-          quantity:
-            item.quantity,
-        }),
-      );
-
-    console.log(
-      "[SMARTBILL] FINAL LINE ITEMS:",
-      JSON.stringify(
-        lineItems,
-        null,
-        2,
-      ),
-    );
-
-    // ========================================================
-    // IDEMPOTENCY KEY
-    // ========================================================
-    //
-    // IMPORTANT:
-    // New key for every manual attempt.
-    //
-    // The old implementation used only:
-    // smartbill-shop-aviz
-    //
-    // After a failed Shopify request, retrying with exactly
-    // the same idempotency key can return the previous failure.
-    // ========================================================
-
-    const idempotencyKey =
-      `smartbill-${session.shop}-${aviz.number}-${crypto.randomUUID()}`;
-
-    console.log(
-      "[SMARTBILL] NEW IDEMPOTENCY KEY:",
-      idempotencyKey,
-    );
-
-    // ========================================================
-    // CREATE TRANSFER VARIABLES
-    // ========================================================
-
-    const input = {
-      originLocationId:
-        aviz.originLocation.id,
-
-      destinationLocationId:
-        aviz.destinationLocation.id,
-
-      referenceName:
-        aviz.number,
-
-      dateCreated:
-        aviz.date
-          ? `${aviz.date}T00:00:00Z`
-          : undefined,
-
-      note:
-        `SmartBill delivery note ${aviz.number}`,
-
-      lineItems,
-    };
-
-    const variables = {
-      input,
-      idempotencyKey,
-    };
-
-    console.log(
-      "[SMARTBILL] ==================================================",
-    );
-
-    console.log(
-      "[SMARTBILL] CREATE TRANSFER VARIABLES:",
-      JSON.stringify(
-        variables,
-        null,
-        2,
-      ),
-    );
-
-    console.log(
-      "[SMARTBILL] ORIGIN LOCATION ID:",
-      aviz.originLocation.id,
-    );
-
-    console.log(
-      "[SMARTBILL] ORIGIN LOCATION NAME:",
-      aviz.originLocation.name,
-    );
-
-    console.log(
-      "[SMARTBILL] DESTINATION LOCATION ID:",
-      aviz.destinationLocation.id,
-    );
-
-    console.log(
-      "[SMARTBILL] DESTINATION LOCATION NAME:",
-      aviz.destinationLocation.name,
-    );
-
-    console.log(
-      "[SMARTBILL] REFERENCE NAME:",
-      aviz.number,
-    );
-
-    console.log(
-      "[SMARTBILL] DATE CREATED:",
-      input.dateCreated,
-    );
-
-    console.log(
-      "[SMARTBILL] LINE ITEMS COUNT:",
-      lineItems.length,
-    );
-
-    console.log(
-      "[SMARTBILL] ==================================================",
-    );
-
-    // ========================================================
-    // SHOPIFY MUTATION
-    // ========================================================
-
-    const mutation = `#graphql
-      mutation CreateInventoryTransfer(
-        $input: InventoryTransferCreateInput!
-        $idempotencyKey: String!
-      ) {
-        inventoryTransferCreate(
-          input: $input
-        ) @idempotent(
-          key: $idempotencyKey
-        ) {
-          inventoryTransfer {
-            id
-            name
-            status
-            referenceName
-            origin {
-              name
-            }
-            destination {
-              name
-            }
-          }
-
-          userErrors {
-            field
-            message
-            code
-          }
-        }
-      }
-    `;
-
-    console.log(
-      "[SMARTBILL] Sending inventoryTransferCreate to Shopify...",
-    );
-
-    const shopifyStartedAt =
-      Date.now();
-
-    let response;
-
-    try {
-      response =
-        await admin.graphql(
-          mutation,
-          {
-            variables,
-          },
-        );
-    } catch (error) {
-      console.error(
-        "[SMARTBILL] SHOPIFY GRAPHQL REQUEST ERROR:",
-        error,
-      );
+      // ------------------------------------------------------
+      // NO TRANSFER RETURNED
+      // ------------------------------------------------------
 
       if (
-        error instanceof Error
+        !result.inventoryTransfer
       ) {
         console.error(
-          "[SMARTBILL] ERROR MESSAGE:",
-          error.message,
+          "[SHOPIFY CREATE] NO TRANSFER RETURNED:",
+          JSON.stringify(
+            result,
+            null,
+            2,
+          ),
         );
 
-        console.error(
-          "[SMARTBILL] ERROR STACK:",
-          error.stack,
-        );
+        return {
+          ok: false,
+          error:
+            "Shopify did not return the created transfer.",
+          details: result,
+        };
       }
 
-      return {
-        ok: false,
-        error:
-          "Shopify GraphQL request failed.",
-        details: {
-          message:
-            error instanceof Error
-              ? error.message
-              : String(error),
-        },
-      };
-    }
+      // ------------------------------------------------------
+      // SUCCESS
+      // ------------------------------------------------------
 
-    console.log(
-      "[SMARTBILL] Shopify response received in:",
-      Date.now() -
-        shopifyStartedAt,
-      "ms",
-    );
+      const transfer =
+        result.inventoryTransfer;
 
-    let json: any;
+      const adminUrl =
+        getTransferAdminUrl(
+          session.shop,
+          transfer.id,
+        );
 
-    try {
-      json =
-        await response.json();
-    } catch (error) {
-      console.error(
-        "[SMARTBILL] FAILED TO PARSE SHOPIFY RESPONSE:",
-        error,
+      console.log(
+        "============================================================",
       );
 
-      return {
-        ok: false,
-        error:
-          "Could not parse Shopify response.",
-      };
-    }
-
-    // ========================================================
-    // RAW SHOPIFY RESPONSE
-    // ========================================================
-
-    console.log(
-      "[SMARTBILL] ==================================================",
-    );
-
-    console.log(
-      "[SMARTBILL] SHOPIFY RAW RESPONSE:",
-      JSON.stringify(
-        json,
-        null,
-        2,
-      ),
-    );
-
-    console.log(
-      "[SMARTBILL] SHOPIFY GRAPHQL ERRORS:",
-      JSON.stringify(
-        json.errors || null,
-        null,
-        2,
-      ),
-    );
-
-    const createResult =
-      json.data
-        ?.inventoryTransferCreate;
-
-    console.log(
-      "[SMARTBILL] INVENTORY TRANSFER CREATE RESULT:",
-      JSON.stringify(
-        createResult || null,
-        null,
-        2,
-      ),
-    );
-
-    const userErrors =
-      createResult
-        ?.userErrors || [];
-
-    console.log(
-      "[SMARTBILL] SHOPIFY USER ERRORS:",
-      JSON.stringify(
-        userErrors,
-        null,
-        2,
-      ),
-    );
-
-    const createdTransfer =
-      createResult
-        ?.inventoryTransfer;
-
-    console.log(
-      "[SMARTBILL] CREATED TRANSFER:",
-      JSON.stringify(
-        createdTransfer || null,
-        null,
-        2,
-      ),
-    );
-
-    console.log(
-      "[SMARTBILL] ==================================================",
-    );
-
-    // ========================================================
-    // GRAPHQL TOP-LEVEL ERRORS
-    // ========================================================
-
-    if (
-      Array.isArray(json.errors) &&
-      json.errors.length > 0
-    ) {
-      console.error(
-        "[SMARTBILL] TOP-LEVEL SHOPIFY GRAPHQL ERROR DETECTED.",
+      console.log(
+        "[SHOPIFY CREATE] SUCCESS",
       );
 
-      return {
-        ok: false,
-        error:
-          "Shopify GraphQL returned an error.",
-        details: {
-          graphqlErrors:
-            json.errors,
-          userErrors,
-        },
-      };
-    }
-
-    // ========================================================
-    // USER ERRORS
-    // ========================================================
-
-    if (
-      userErrors.length > 0
-    ) {
-      console.error(
-        "[SMARTBILL] SHOPIFY REJECTED TRANSFER CREATION.",
+      console.log(
+        "[SHOPIFY CREATE] TRANSFER ID:",
+        transfer.id,
       );
 
-      return {
-        ok: false,
-        error:
-          "Shopify rejected the transfer creation.",
-        details: {
-          userErrors,
-          input: {
-            originLocationId:
-              input.originLocationId,
-            destinationLocationId:
-              input.destinationLocationId,
-            referenceName:
-              input.referenceName,
-            dateCreated:
-              input.dateCreated,
-            lineItems,
-          },
-          idempotencyKey,
-        },
-      };
-    }
-
-    // ========================================================
-    // NO TRANSFER RETURNED
-    // ========================================================
-
-    if (
-      !createdTransfer
-    ) {
-      console.error(
-        "[SMARTBILL] SHOPIFY RETURNED NO TRANSFER AND NO USER ERRORS.",
+      console.log(
+        "[SHOPIFY CREATE] TRANSFER NAME:",
+        transfer.name,
       );
 
-      return {
-        ok: false,
-        error:
-          "Shopify did not return the created transfer.",
-        details: {
-          response: json,
-          idempotencyKey,
-        },
-      };
-    }
+      console.log(
+        "[SHOPIFY CREATE] STATUS:",
+        transfer.status,
+      );
 
-    // ========================================================
-    // SAVE IMPORT HISTORY
-    // ========================================================
+      console.log(
+        "[SHOPIFY CREATE] REFERENCE:",
+        transfer.referenceName,
+      );
 
-    console.log(
-      "[SMARTBILL] Saving transfer to ImportHistory...",
-    );
+      console.log(
+        "[SHOPIFY CREATE] ORIGIN:",
+        JSON.stringify(
+          transfer.origin,
+          null,
+          2,
+        ),
+      );
 
-    try {
+      console.log(
+        "[SHOPIFY CREATE] DESTINATION:",
+        JSON.stringify(
+          transfer.destination,
+          null,
+          2,
+        ),
+      );
+
+      // ------------------------------------------------------
+      // SAVE IMPORT HISTORY
+      // ------------------------------------------------------
+
       await prisma.importHistory.create({
         data: {
-          shop:
-            session.shop,
+          shop: session.shop,
 
           avizNumber:
             aviz.number,
 
           transferId:
-            createdTransfer.id,
+            transfer.id,
 
           transferName:
-            createdTransfer.name,
+            transfer.name,
         },
       });
 
       console.log(
-        "[SMARTBILL] ImportHistory saved successfully.",
-      );
-    } catch (error) {
-      console.error(
-        "[SMARTBILL] FAILED TO SAVE IMPORT HISTORY:",
-        error,
+        "[SMARTBILL] Import history saved:",
+        aviz.number,
       );
 
-      if (
-        error instanceof Error
-      ) {
-        console.error(
-          "[SMARTBILL] HISTORY ERROR MESSAGE:",
-          error.message,
-        );
-
-        console.error(
-          "[SMARTBILL] HISTORY ERROR STACK:",
-          error.stack,
-        );
-      }
+      console.log(
+        "[SMARTBILL] BEFORE RESPONSE",
+        new Date().toISOString(),
+      );
 
       return {
-        ok: false,
-        error:
-          "Transfer was created in Shopify, but saving Import History failed.",
-        details: {
-          transfer:
-            createdTransfer,
-          error:
-            error instanceof Error
-              ? error.message
-              : String(error),
+        ok: true,
+        mode: "transfer",
+
+        transfer: {
+          id:
+            transfer.id,
+
+          name:
+            transfer.name,
+
+          status:
+            transfer.status,
+
+          referenceName:
+            transfer.referenceName,
+
+          origin:
+            transfer.origin.name,
+
+          destination:
+            transfer.destination.name,
+
+          adminUrl,
         },
+
+        items: items.map(
+          (item) => ({
+            sku: item.sku,
+            quantity:
+              item.quantity,
+            inventoryItemId:
+              item.inventoryItemId,
+          }),
+        ),
       };
     }
 
     // ========================================================
-    // SUCCESS
+    // PREVIEW
     // ========================================================
 
+    const file =
+      formData.get("pdf");
+
+    if (!(file instanceof File)) {
+      return {
+        ok: false,
+        error:
+          "No PDF file was selected.",
+      };
+    }
+
+    if (file.size === 0) {
+      return {
+        ok: false,
+        error:
+          "The PDF file is empty.",
+      };
+    }
+
+    const isPdf =
+      file.type ===
+        "application/pdf" ||
+      file.name
+        .toLowerCase()
+        .endsWith(".pdf");
+
+    if (!isPdf) {
+      return {
+        ok: false,
+        error:
+          "The selected file must be a PDF.",
+      };
+    }
+
     console.log(
-      "[SMARTBILL] ==================================================",
+      "============================================================",
     );
 
     console.log(
-      "[SMARTBILL] TRANSFER CREATED SUCCESSFULLY",
+      "=== SMARTBILL PDF IMPORT START ===",
+    );
+
+    // --------------------------------------------------------
+    // 1. EXTRACT PDF
+    // --------------------------------------------------------
+
+    const avizText =
+      await extractPdfText(file);
+
+    if (!avizText.trim()) {
+      return {
+        ok: false,
+        error:
+          "The PDF does not contain extractable text.",
+      };
+    }
+
+    // --------------------------------------------------------
+    // 2. PARSE
+    // --------------------------------------------------------
+
+    let aviz: ParsedAviz;
+
+    try {
+      aviz =
+        parseAviz(
+          avizText,
+        );
+    } catch (error) {
+      console.error(
+        "[SMARTBILL] PARSE ERROR:",
+        error,
+      );
+
+      return {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not parse the delivery note.",
+      };
+    }
+
+    console.log(
+      "[SMARTBILL] Delivery note identified:",
+      aviz.number,
     );
 
     console.log(
-      "[SMARTBILL] Transfer:",
+      "[SMARTBILL] Delivery date:",
+      aviz.date,
+    );
+
+    console.log(
+      "[SMARTBILL] Delivery address:",
+      aviz.deliveryAddress,
+    );
+
+    console.log(
+      "[SMARTBILL] SKUs:",
       JSON.stringify(
-        createdTransfer,
+        aviz.items,
+        null,
+        2,
+      ),
+    );
+
+    // --------------------------------------------------------
+    // 3. DUPLICATE CHECK
+    // --------------------------------------------------------
+
+    const existingImport =
+      await prisma.importHistory.findUnique({
+        where: {
+          shop_avizNumber: {
+            shop: session.shop,
+            avizNumber:
+              aviz.number,
+          },
+        },
+      });
+
+    if (existingImport) {
+      return {
+        ok: false,
+        error:
+          `Delivery note ${aviz.number} has already been imported as ${existingImport.transferName}.`,
+      };
+    }
+
+    // --------------------------------------------------------
+    // 4. DESTINATION
+    // --------------------------------------------------------
+
+    const destinationLocation =
+      getDestinationLocation(
+        aviz.deliveryAddress,
+      );
+
+    if (!destinationLocation) {
+      return {
+        ok: false,
+        error:
+          "The delivery address does not contain a valid location keyword. Expected case-sensitive 'Calea Floreasca' for Magazin Promenada or 'Calea Rahovei' for Sediu Principal.",
+
+        details: {
+          deliveryAddress:
+            aviz.deliveryAddress,
+
+          expectedKeywords: {
+            promenada:
+              LOCATION_PROMENADA
+                .deliveryAddressKeyword,
+
+            sediu:
+              LOCATION_SEDIU
+                .deliveryAddressKeyword,
+          },
+        },
+      };
+    }
+
+    // --------------------------------------------------------
+    // 5. ORIGIN
+    // --------------------------------------------------------
+
+    const originLocation =
+      getOriginLocation(
+        destinationLocation,
+      );
+
+    console.log(
+      "============================================================",
+    );
+
+    console.log(
+      "=== TRANSFER DIRECTION ===",
+    );
+
+    console.log(
+      "[DIRECTION] Delivery address:",
+      aviz.deliveryAddress,
+    );
+
+    console.log(
+      "[DIRECTION] Origin:",
+      JSON.stringify(
+        originLocation,
         null,
         2,
       ),
     );
 
     console.log(
-      "[SMARTBILL] Total ACTION duration:",
-      Date.now() -
-        startedAt,
-      "ms",
+      "[DIRECTION] Destination:",
+      JSON.stringify(
+        destinationLocation,
+        null,
+        2,
+      ),
     );
 
-    console.log(
-      "[SMARTBILL] ==================================================",
-    );
+    // --------------------------------------------------------
+    // 6. SKU LOOKUP
+    // --------------------------------------------------------
 
-    return {
-      ok: true,
+    const skuStarted =
+      performance.now();
 
-      transfer: {
-        id:
-          createdTransfer.id,
+    try {
+      const foundItems =
+        await Promise.all(
+          aviz.items.map(
+            async (item) => {
+              const found =
+                await findSkuInShopify(
+                  admin,
+                  item.sku,
+                );
 
-        name:
-          createdTransfer.name,
+              return {
+                ...found,
+                quantity:
+                  item.quantity,
+              };
+            },
+          ),
+        );
 
-        status:
-          createdTransfer.status,
+      console.log(
+        `[SMARTBILL] Shopify SKU lookup: ${(performance.now() - skuStarted).toFixed(0)} ms`,
+      );
 
-        referenceName:
-          createdTransfer.referenceName,
+      console.log(
+        "[SMARTBILL] All SKUs were found in Shopify.",
+      );
 
-        origin:
-          createdTransfer.origin,
+      console.log(
+        "[SMARTBILL] BEFORE RESPONSE",
+        new Date().toISOString(),
+      );
 
-        destination:
-          createdTransfer.destination,
-      },
-    };
+      return {
+        ok: true,
+        mode: "preview",
+
+        aviz,
+
+        direction: {
+          origin:
+            originLocation.name,
+
+          destination:
+            destinationLocation.name,
+        },
+
+        items: foundItems,
+      };
+    } catch (error) {
+      console.error(
+        "[SMARTBILL] SKU LOOKUP ERROR:",
+        error,
+      );
+
+      return {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "An error occurred while looking up products in Shopify.",
+      };
+    }
   } catch (error) {
     console.error(
-      "[SMARTBILL] ==================================================",
+      "============================================================",
     );
 
     console.error(
-      "[SMARTBILL] UNHANDLED ACTION ERROR:",
+      "SMARTBILL IMPORT ERROR:",
       error,
     );
 
-    if (
-      error instanceof Error
-    ) {
-      console.error(
-        "[SMARTBILL] ERROR MESSAGE:",
-        error.message,
-      );
-
-      console.error(
-        "[SMARTBILL] ERROR STACK:",
-        error.stack,
-      );
-    }
-
     console.error(
-      "[SMARTBILL] ==================================================",
+      "============================================================",
     );
 
     return {
@@ -1637,13 +1676,7 @@ export const action = async ({
       error:
         error instanceof Error
           ? error.message
-          : "Unexpected server error.",
-      details: {
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error),
-      },
+          : "An unexpected error occurred while processing the PDF.",
     };
   }
 };
@@ -1652,206 +1685,526 @@ export const action = async ({
 // UI
 // ============================================================
 
-export default function TransferImporter() {
-  const {
-    importHistory,
-  } = useLoaderData<
-    typeof loader
-  >();
-
+export default function Index() {
   const fetcher =
-    useFetcher<
-      typeof action
-    >();
+    useFetcher<ActionResult>();
 
-  const isSubmitting =
-    fetcher.state !== "idle";
+  const shopify =
+    useAppBridge();
 
-  const result =
-    fetcher.data as
-      | ActionResult
-      | undefined;
+  const [file, setFile] =
+    useState<File | null>(null);
+
+  const isLoading =
+    ["loading", "submitting"].includes(
+      fetcher.state,
+    ) &&
+    fetcher.formMethod === "POST";
+
+  const previewData =
+    fetcher.data?.ok &&
+    fetcher.data.mode ===
+      "preview"
+      ? fetcher.data
+      : null;
+
+  const transferData =
+    fetcher.data?.ok &&
+    fetcher.data.mode ===
+      "transfer"
+      ? fetcher.data
+      : null;
+
+  useEffect(() => {
+    if (transferData) {
+      shopify.toast.show(
+        `Transfer created for ${
+          transferData.transfer
+            .referenceName ??
+          "delivery note"
+        }.`,
+      );
+    }
+
+    if (
+      fetcher.data &&
+      !fetcher.data.ok
+    ) {
+      shopify.toast.show(
+        fetcher.data.error,
+      );
+    }
+  }, [
+    fetcher.data,
+    shopify,
+    transferData,
+  ]);
+
+  // ==========================================================
+  // UPLOAD PDF
+  // ==========================================================
+
+  const uploadPdf = (
+    selectedFile: File,
+  ) => {
+    const formData =
+      new FormData();
+
+    formData.append(
+      "pdf",
+      selectedFile,
+    );
+
+    formData.append(
+      "createTransfer",
+      "false",
+    );
+
+    fetcher.submit(
+      formData,
+      {
+        method: "POST",
+        encType:
+          "multipart/form-data",
+      },
+    );
+  };
+
+  // ==========================================================
+  // CREATE TRANSFER
+  // ==========================================================
+
+  const createTransfer = () => {
+    if (!previewData) {
+      return;
+    }
+
+    const destinationLocation =
+      getDestinationLocation(
+        previewData.aviz
+          .deliveryAddress,
+      );
+
+    if (!destinationLocation) {
+      shopify.toast.show(
+        "The delivery address could not be matched to a Shopify location.",
+      );
+
+      return;
+    }
+
+    const originLocation =
+      getOriginLocation(
+        destinationLocation,
+      );
+
+    console.log(
+      "[CLIENT DEBUG] CREATE TRANSFER",
+      {
+        aviz:
+          previewData.aviz.number,
+
+        deliveryAddress:
+          previewData.aviz
+            .deliveryAddress,
+
+        origin:
+          originLocation,
+
+        destination:
+          destinationLocation,
+
+        items:
+          previewData.items,
+      },
+    );
+
+    const formData =
+      new FormData();
+
+    formData.append(
+      "createTransfer",
+      "true",
+    );
+
+    formData.append(
+      "transferData",
+      JSON.stringify({
+        aviz:
+          previewData.aviz,
+
+        items:
+          previewData.items,
+
+        originLocation,
+
+        destinationLocation,
+      }),
+    );
+
+    fetcher.submit(
+      formData,
+      {
+        method: "POST",
+      },
+    );
+  };
+
+  // ==========================================================
+  // RENDER
+  // ==========================================================
 
   return (
-    <s-page heading="Transfer Importer">
+    <s-page heading="ShopyBill">
 
-      {/* ======================================================
-          IMPORT
-      ====================================================== */}
+      <s-section heading="Import SmartBill Delivery Note">
 
-      <s-section heading="Import SmartBill delivery note">
-
-        <fetcher.Form
-          method="post"
-          encType="multipart/form-data"
+        <s-stack
+          direction="block"
+          gap="base"
         >
 
+          <s-paragraph>
+            Upload a SmartBill delivery
+            note in PDF format.
+          </s-paragraph>
+
           <input
-            type="hidden"
-            name="action"
-            value="createTransfer"
+            type="file"
+            accept="application/pdf,.pdf"
+            onChange={(event) => {
+              const selectedFile =
+                event.target.files?.[0] ??
+                null;
+
+              setFile(
+                selectedFile,
+              );
+
+              if (selectedFile) {
+                uploadPdf(
+                  selectedFile,
+                );
+              }
+            }}
           />
+
+          {file ? (
+            <s-box
+              padding="base"
+              borderWidth="base"
+              borderRadius="base"
+            >
+              <s-stack
+                direction="block"
+                gap="small"
+              >
+
+                <span>
+                  <strong>
+                    Selected file:
+                  </strong>
+                </span>
+
+                <span>
+                  {file.name}
+                </span>
+
+                <span>
+                  {(
+                    file.size /
+                    1024
+                  ).toFixed(1)}{" "}
+                  KB
+                </span>
+
+                {isLoading ? (
+                  <span>
+                    Processing PDF...
+                  </span>
+                ) : null}
+
+              </s-stack>
+            </s-box>
+          ) : null}
+
+        </s-stack>
+
+      </s-section>
+
+      {previewData ? (
+        <s-section
+          heading={`Delivery Note ${previewData.aviz.number}`}
+        >
 
           <s-stack
             direction="block"
             gap="base"
           >
 
-            <s-text>
-              Upload a SmartBill delivery note PDF.
-            </s-text>
+            <s-paragraph>
+              <strong>
+                Date:
+              </strong>{" "}
+              {previewData.aviz.date ||
+                "Not specified"}
+            </s-paragraph>
 
-            <input
-              type="file"
-              name="file"
-              accept="application/pdf,.pdf"
-              required
-            />
+            <s-paragraph>
+              <strong>
+                Delivery address:
+              </strong>{" "}
+              {
+                previewData.aviz
+                  .deliveryAddress
+              }
+            </s-paragraph>
+
+            <s-paragraph>
+              <strong>
+                Direction:
+              </strong>{" "}
+              {
+                previewData.direction
+                  .origin
+              }
+              {" → "}
+              {
+                previewData.direction
+                  .destination
+              }
+            </s-paragraph>
+
+            <s-divider />
+
+            <s-heading>
+              Products
+            </s-heading>
+
+            {previewData.items.map(
+              (item) => (
+                <s-box
+                  key={item.sku}
+                  padding="base"
+                  borderWidth="base"
+                  borderRadius="base"
+                >
+
+                  <s-stack
+                    direction="block"
+                    gap="small"
+                  >
+
+                    <span>
+                      <strong>
+                        {item.sku}
+                      </strong>
+                    </span>
+
+                    <span>
+                      <strong>
+                        Product:
+                      </strong>{" "}
+                      {
+                        item.productTitle
+                      }
+                    </span>
+
+                    <span>
+                      <strong>
+                        Variant:
+                      </strong>{" "}
+                      {
+                        item.variantTitle
+                      }
+                    </span>
+
+                    <span>
+                      <strong>
+                        Quantity:
+                      </strong>{" "}
+                      {
+                        item.quantity
+                      }
+                    </span>
+
+                  </s-stack>
+
+                </s-box>
+              ),
+            )}
 
             <s-button
-              type="submit"
-              disabled={isSubmitting}
+              variant="primary"
+              onClick={
+                createTransfer
+              }
+              {...(
+                isLoading
+                  ? {
+                      loading: true,
+                    }
+                  : {}
+              )}
             >
-              {isSubmitting
-                ? "Importing..."
-                : "Import transfer"}
+              {isLoading
+                ? "Creating transfer..."
+                : "Create transfer"}
             </s-button>
 
           </s-stack>
 
-        </fetcher.Form>
+        </s-section>
+      ) : null}
 
-      </s-section>
+      {fetcher.data &&
+      !fetcher.data.ok ? (
+        <s-section heading="Error">
 
-      {/* ======================================================
-          RESULT
-      ====================================================== */}
+          <s-box
+            padding="base"
+            borderWidth="base"
+            borderRadius="base"
+            background="subdued"
+          >
 
-      {result?.ok && result.transfer ? (
-        <s-section heading="Import successful">
+            <s-paragraph>
+              {
+                fetcher.data
+                  .error
+              }
+            </s-paragraph>
 
-          <s-paragraph>
-            Transfer{" "}
-            <strong>
-              {result.transfer.name}
-            </strong>{" "}
-            was created successfully.
-          </s-paragraph>
+          </s-box>
 
-          {result.transfer.id ? (
+        </s-section>
+      ) : null}
+
+      {transferData ? (
+        <s-section heading="Transfer Created">
+
+          <s-stack
+            direction="block"
+            gap="base"
+          >
+
+            <s-heading>
+              {
+                transferData
+                  .transfer
+                  .referenceName ??
+                transferData
+                  .transfer
+                  .name
+              }
+            </s-heading>
+
+            <s-paragraph>
+              <strong>
+                Shopify Transfer:
+              </strong>{" "}
+              {
+                transferData
+                  .transfer
+                  .name
+              }
+            </s-paragraph>
+
+            <s-paragraph>
+              <strong>
+                Status:
+              </strong>{" "}
+              {
+                transferData
+                  .transfer
+                  .status
+              }
+            </s-paragraph>
+
+            <s-paragraph>
+              <strong>
+                Direction:
+              </strong>{" "}
+              {
+                transferData
+                  .transfer
+                  .origin
+              }
+              {" → "}
+              {
+                transferData
+                  .transfer
+                  .destination
+              }
+            </s-paragraph>
+
             <s-button
-              href={getTransferAdminUrl(
-                window.location.hostname,
-                result.transfer.id,
-              )}
+              href={
+                transferData
+                  .transfer
+                  .adminUrl
+              }
               target="_blank"
             >
               View transfer
             </s-button>
-          ) : null}
 
-        </s-section>
-      ) : null}
+            <s-divider />
 
-      {result &&
-      !result.ok ? (
-        <s-section heading="Error">
+            <s-heading>
+              Transferred Products
+            </s-heading>
 
-          <s-paragraph>
-            {result.error}
-          </s-paragraph>
+            {transferData.items.map(
+              (item) => (
+                <s-box
+                  key={item.sku}
+                  padding="base"
+                  borderWidth="base"
+                  borderRadius="base"
+                >
 
-          {result.details ? (
-            <pre
-              style={{
-                whiteSpace:
-                  "pre-wrap",
-                overflowWrap:
-                  "anywhere",
-                fontSize:
-                  "12px",
-              }}
-            >
-              {JSON.stringify(
-                result.details,
-                null,
-                2,
-              )}
-            </pre>
-          ) : null}
-
-        </s-section>
-      ) : null}
-
-      {/* ======================================================
-          HISTORY
-      ====================================================== */}
-
-      <s-section heading="Recent imports">
-
-        {importHistory.length === 0 ? (
-          <s-paragraph>
-            No transfers have been imported yet.
-          </s-paragraph>
-        ) : (
-          <s-table>
-
-            <s-table-header-row>
-
-              <s-table-header>
-                Delivery note number
-              </s-table-header>
-
-              <s-table-header>
-                Shopify transfer
-              </s-table-header>
-
-              <s-table-header>
-                Action
-              </s-table-header>
-
-            </s-table-header-row>
-
-            <s-table-body>
-
-              {importHistory.map(
-                (item) => (
-                  <s-table-row
-                    key={item.id}
+                  <s-stack
+                    direction="inline"
+                    gap="base"
                   >
 
-                    <s-table-cell>
-                      {item.avizNumber}
-                    </s-table-cell>
+                    <span>
+                      <strong>
+                        {item.sku}
+                      </strong>
+                    </span>
 
-                    <s-table-cell>
-                      {item.transferName}
-                    </s-table-cell>
+                    <span>
+                      Quantity:{" "}
+                      {
+                        item.quantity
+                      }
+                    </span>
 
-                    <s-table-cell>
+                  </s-stack>
 
-                      <s-button
-                        href={
-                          item.transferUrl
-                        }
-                        target="_blank"
-                      >
-                        View transfer
-                      </s-button>
+                </s-box>
+              ),
+            )}
 
-                    </s-table-cell>
+          </s-stack>
 
-                  </s-table-row>
-                ),
-              )}
-
-            </s-table-body>
-
-          </s-table>
-        )}
-
-      </s-section>
+        </s-section>
+      ) : null}
 
     </s-page>
   );
 }
+
+// ============================================================
+// HEADERS
+// ============================================================
+
+export const headers: HeadersFunction = (
+  headersArgs,
+) => {
+  return boundary.headers(
+    headersArgs,
+  );
+};
