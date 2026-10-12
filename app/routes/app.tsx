@@ -21,14 +21,7 @@ export default function App() {
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Import Transfer</s-link>
-        <s-link href="/app/transfer-history">
-          Transfer History
-        </s-link>
-        <s-link href="/app/additional">
-          Additional Page
-        </s-link>
       </s-app-nav>
-
       <Outlet />
     </AppProvider>
   );

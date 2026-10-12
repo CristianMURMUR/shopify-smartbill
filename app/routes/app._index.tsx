@@ -10,7 +10,6 @@ import { useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import prisma from "../db.server";
 
 // ============================================================
 // SHOPIFY LOCATIONS
@@ -783,34 +782,6 @@ export const action = async ({
       );
 
       // ------------------------------------------------------
-      // DUPLICATE CHECK
-      // ------------------------------------------------------
-
-      const existingImport =
-        await prisma.importHistory.findUnique({
-          where: {
-            shop_avizNumber: {
-              shop: session.shop,
-              avizNumber:
-                aviz.number,
-            },
-          },
-        });
-
-      if (existingImport) {
-        console.log(
-          "[TRANSFER DEBUG] DUPLICATE FOUND:",
-          existingImport,
-        );
-
-        return {
-          ok: false,
-          error:
-            `Delivery note ${aviz.number} has already been imported as ${existingImport.transferName}.`,
-        };
-      }
-
-      // ------------------------------------------------------
       // VERIFY LOCATIONS
       // ------------------------------------------------------
 
@@ -1314,70 +1285,27 @@ export const action = async ({
         ),
       );
 
-      // ------------------------------------------------------
-      // SAVE IMPORT HISTORY
-      // ------------------------------------------------------
-
-      await prisma.importHistory.create({
-        data: {
-          shop: session.shop,
-
-          avizNumber:
-            aviz.number,
-
-          transferId:
-            transfer.id,
-
-          transferName:
-            transfer.name,
-        },
-      });
-
-      console.log(
-        "[SMARTBILL] Import history saved:",
-        aviz.number,
-      );
-
-      console.log(
-        "[SMARTBILL] BEFORE RESPONSE",
-        new Date().toISOString(),
-      );
-
-      return {
+            return {
         ok: true,
         mode: "transfer",
-
         transfer: {
-          id:
-            transfer.id,
-
-          name:
-            transfer.name,
-
-          status:
-            transfer.status,
-
-          referenceName:
-            transfer.referenceName,
-
+          id: transfer.id,
+          name: transfer.name,
+          status: transfer.status,
+          referenceName: transfer.referenceName ?? null,
           origin:
-            transfer.origin.name,
-
+            transfer.origin?.name ??
+            originLocation.name,
           destination:
-            transfer.destination.name,
-
+            transfer.destination?.name ??
+            destinationLocation.name,
           adminUrl,
         },
-
-        items: items.map(
-          (item) => ({
-            sku: item.sku,
-            quantity:
-              item.quantity,
-            inventoryItemId:
-              item.inventoryItemId,
-          }),
-        ),
+        items: items.map((item) => ({
+          sku: item.sku,
+          quantity: item.quantity,
+          inventoryItemId: item.inventoryItemId,
+        })),
       };
     }
 
@@ -1492,28 +1420,6 @@ export const action = async ({
       ),
     );
 
-    // --------------------------------------------------------
-    // 3. DUPLICATE CHECK
-    // --------------------------------------------------------
-
-    const existingImport =
-      await prisma.importHistory.findUnique({
-        where: {
-          shop_avizNumber: {
-            shop: session.shop,
-            avizNumber:
-              aviz.number,
-          },
-        },
-      });
-
-    if (existingImport) {
-      return {
-        ok: false,
-        error:
-          `Delivery note ${aviz.number} has already been imported as ${existingImport.transferName}.`,
-      };
-    }
 
     // --------------------------------------------------------
     // 4. DESTINATION
